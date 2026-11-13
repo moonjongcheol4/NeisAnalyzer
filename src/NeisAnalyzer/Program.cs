@@ -26,16 +26,20 @@ namespace NeisAnalyzer
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             if (args.Length >= 4 && args[0] == "--ui-test")
-                return UiTest(args[1], args[2], args[3]);
+            {
+                float scale = 0;
+                if (args.Length >= 5) float.TryParse(args[4], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out scale);
+                return UiTest(args[1], args[2], args[3], scale);
+            }
             Application.Run(new MainForm());
             return 0;
         }
 
-        /// <summary>자동 시험용: 창을 띄워 파일을 넣고 분석까지 돌린 뒤 화면을 그림 파일로 저장한다.</summary>
-        static int UiTest(string inputFolder, string outXlsx, string screenshotPng)
+        /// <summary>자동 시험용: 창을 띄워 파일을 넣고 분석까지 돌린 뒤 화면을 그림 파일로 저장한다. scale이 0이 아니면 그 배율 화면(예: 1.5)처럼 그린다.</summary>
+        static int UiTest(string inputFolder, string outXlsx, string screenshotPng, float scale)
         {
             int code = 1;
-            var form = new MainForm();
+            var form = new MainForm(scale);
             form.Shown += async (s, e) =>
             {
                 try

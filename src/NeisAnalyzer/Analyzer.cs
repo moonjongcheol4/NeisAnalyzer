@@ -53,6 +53,20 @@ namespace NeisAnalyzer
         public double AttractiveWrongRate;
         public Dictionary<int, double> ClassCorrectRate = new Dictionary<int, double>();
         public Dictionary<int, int> ClassN = new Dictionary<int, int>();
+        // 성취도(A~E)별 정답률: 낮은 성취도가 높은 성취도보다 많이 맞힌 "수준 역전" 문항을 찾는 데 쓴다
+        public Dictionary<string, int> LevelN = new Dictionary<string, int>();
+        public Dictionary<string, double> LevelCorrectRate = new Dictionary<string, double>();
+        public string LevelInversion;    // 예: "수준 역전: D가 B보다 20%p 높음" (없으면 null)
+    }
+
+    /// <summary>성취도(A~E)별 인원·평균·표준편차 (KICE 성취도분석표와 같은 구성)</summary>
+    public class LevelSummary
+    {
+        public string Grade;
+        public int Count;
+        public double Mean, Sd, Min, Max;
+        public double? PerfMean;
+        public Dictionary<string, double> WrittenMeans = new Dictionary<string, double>();
     }
 
     public class ExamAnalysis
@@ -103,6 +117,7 @@ namespace NeisAnalyzer
         public List<Student> Ranked = new List<Student>();
         public List<ExamAnalysis> ExamAnalyses = new List<ExamAnalysis>();
         public List<ClassSummary> ClassSummaries = new List<ClassSummary>();
+        public List<LevelSummary> LevelSummaries = new List<LevelSummary>();
         public List<string> Warnings = new List<string>();
         public List<string> Notes = new List<string>();     // 분석 기준 안내에 넣을 설명
         public List<string> Highlights = new List<string>(); // "이번 시험의 특징"
@@ -350,6 +365,26 @@ namespace NeisAnalyzer
                 foreach (var st in r.Ranked) r.Histogram[Bin(st.Final.Value)]++;
             }
 
+            // ---------- 성취도별 통계 ----------
+            foreach (var g in Grades)
+            {
+                var grp = r.Ranked.Where(x => x.Achievement == g).ToList();
+                var ls = new LevelSummary { Grade = g, Count = grp.Count };
+                if (grp.Count > 0)
+                {
+                    var f = grp.Select(x => x.Final.Value).ToList();
+                    ls.Mean = f.Average(); ls.Sd = Sd(f); ls.Min = f.Min(); ls.Max = f.Max();
+                    var pt = grp.Where(x => x.PerfTotal.HasValue).Select(x => x.PerfTotal.Value).ToList();
+                    if (pt.Count > 0) ls.PerfMean = pt.Average();
+                    foreach (var e in r.Exams)
+                    {
+                        var w = grp.Where(x => x.Written.ContainsKey(e)).Select(x => x.Written[e].Total).ToList();
+                        if (w.Count > 0) ls.WrittenMeans[e] = w.Average();
+                    }
+                }
+                r.LevelSummaries.Add(ls);
+            }
+
             // ---------- 반별 통계 ----------
             foreach (var cls in r.Classes)
             {
@@ -419,6 +454,8 @@ namespace NeisAnalyzer
             }
 
             BuildNotes(r);
+            r.Notes.Add("표준편차는 모집단 방식(인원수 N으로 나눔)으로 계산했습니다. 교육과정평가원(KICE) 성취평가 분석 프로그램과 같은 방식이며, 엑셀 STDEV.S(표본 방식, N−1로 나눔)보다 조금 작게 나옵니다.");
+            r.Notes.Add($"성취도별 문항 정답률의 성취도는 최종 점수(수행+지필) 기준 성취도입니다. 낮은 성취도 집단이 높은 성취도 집단보다 {LevelInversionGap:P0} 이상 많이 맞힌 문항은 '수준 역전'으로 표시합니다(두 집단 모두 {LevelInversionMinN}명 이상일 때).");
             BuildHighlights(r);
             return r;
         }
@@ -454,6 +491,9 @@ namespace NeisAnalyzer
             var choiceTotals = rows.Select(row => { double t = 0; for (int i = 0; i < first.Items.Count; i++) if (first.Items[i].IsChoice && row.Answers[i] == ".") t += first.Items[i].Points; return t; }).ToList();
             double varTotal = Variance(choiceTotals);
             double sumItemVar = 0; int kChoice = 0;
+            // 학생별 성취도(최종 점수 기준) — 성취도별 정답률 계산용
+            var levelByKey = new Dictionary<string, string>();
+            foreach (var st0 in r.Students) if (st0.Achievement != null) levelByKey[st0.Key] = st0.Achievement;
 
             for (int i = 0; i < first.Items.Count; i++)
             {
@@ -477,8 +517,17 @@ namespace NeisAnalyzer
                     if (!st.ClassN.ContainsKey(row.ClassNo)) { st.ClassN[row.ClassNo] = 0; st.ClassCorrectRate[row.ClassNo] = 0; }
                     st.ClassN[row.ClassNo]++;
                     if (correct) st.ClassCorrectRate[row.ClassNo]++;
+                    string lv;
+                    if (levelByKey.TryGetValue(row.ClassNo + "/" + row.Number, out lv))
+                    {
+                        if (!st.LevelN.ContainsKey(lv)) { st.LevelN[lv] = 0; st.LevelCorrectRate[lv] = 0; }
+                        st.LevelN[lv]++;
+                        if (correct) st.LevelCorrectRate[lv]++;
+                    }
                 }
                 foreach (var c in st.ClassN.Keys.ToList()) st.ClassCorrectRate[c] = st.ClassN[c] == 0 ? 0 : st.ClassCorrectRate[c] / st.ClassN[c];
+                foreach (var lv in st.LevelN.Keys.ToList()) st.LevelCorrectRate[lv] = st.LevelN[lv] == 0 ? 0 : st.LevelCorrectRate[lv] / st.LevelN[lv];
+                if (it.Correct.HasValue) st.LevelInversion = FindLevelInversion(st);
                 st.UpperRate = (double)upC / k; st.LowerRate = (double)loC / k;
                 st.Discrimination = st.UpperRate - st.LowerRate;
                 st.PointBiserial = Pearson(correctFlags, totals);
@@ -495,6 +544,23 @@ namespace NeisAnalyzer
             }
             if (kChoice >= 2 && varTotal > 0) ea.KR20 = kChoice / (kChoice - 1.0) * (1 - sumItemVar / varTotal);
             return ea;
+        }
+
+        /// <summary>낮은 성취도 집단의 정답률이 높은 성취도 집단보다 15%p 이상 높으면 "수준 역전"(두 집단 모두 5명 이상일 때만).</summary>
+        public const double LevelInversionGap = 0.15;
+        public const int LevelInversionMinN = 5;
+        static string FindLevelInversion(ItemStat st)
+        {
+            var found = new List<string>();
+            for (int hi = 0; hi < Grades.Length; hi++)
+                for (int lo = hi + 1; lo < Grades.Length; lo++)
+                {
+                    string h = Grades[hi], l = Grades[lo];
+                    if (!st.LevelN.ContainsKey(h) || !st.LevelN.ContainsKey(l) || st.LevelN[h] < LevelInversionMinN || st.LevelN[l] < LevelInversionMinN) continue;
+                    double gap = st.LevelCorrectRate[l] - st.LevelCorrectRate[h];
+                    if (gap >= LevelInversionGap) found.Add($"{l}({st.LevelCorrectRate[l]:P0})가 {h}({st.LevelCorrectRate[h]:P0})보다 높음");
+                }
+            return found.Count == 0 ? null : "수준 역전: " + string.Join(", ", found);
         }
 
         static void Verify(ExamAnalysis ea, ScoreTableFile t, Dictionary<int, AnswerSheetFile> byClass)

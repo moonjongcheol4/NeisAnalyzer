@@ -267,6 +267,8 @@ namespace NeisAnalyzer
                 s.Cells(pre + "평균 정답률", P(avgP), avgP >= 0.8 ? "쉬운 시험" : avgP >= 0.6 ? "적절한 난이도" : avgP >= 0.45 ? "어려운 편" : "매우 어려움", "선택형 문항 정답률의 평균. 60~70%가 적절합니다.");
                 int low = items.Count(i => (i.Discrimination ?? 0) < 0.2), neg = items.Count(i => (i.Discrimination ?? 0) < 0);
                 s.Cells(pre + "변별도 낮은 문항 수(0.2 미만)", (double)low, low == 0 ? "없음(좋음)" : low <= items.Count * 0.15 ? "일부(점검)" : "많음(문항 검토 필요)", $"선택형 {items.Count}문항 중 잘하는 학생과 못하는 학생을 가르지 못하는 문항 수. 이 중 음수 {neg}개.");
+                int inv = items.Count(i => i.LevelInversion != null);
+                s.Cells(pre + "성취도 수준 역전 문항 수", (double)inv, inv == 0 ? "없음(좋음)" : "문항 검토 필요('성취도별 문항' 시트)", "낮은 성취도 집단이 높은 집단보다 15%p 이상 많이 맞힌 문항 수. 정답 오류나 찍기 쉬운 문항일 수 있습니다.");
             }
             if (r.PerfWrittenCorr.HasValue) s.Cells("수행 vs 지필 상관계수", F2(r.PerfWrittenCorr.Value), Glossary.Correlation(r.PerfWrittenCorr.Value), "두 평가가 같은 방향으로 움직이는 정도(-1~1). 0.4~0.7이 흔한 값.");
 
@@ -370,12 +372,34 @@ namespace NeisAnalyzer
                 ((ExcelPieChart)pie).DataLabel.ShowPercent = true; ((ExcelPieChart)pie).DataLabel.ShowCategory = true;
             }
 
+            // 성취도별 평균·표준편차 (KICE 성취도분석표 양식)
+            s.Section("성취도별 인원·평균·표준편차  (교육과정평가원 성취도분석표와 같은 구성)");
+            var lcols = new List<string> { "성취도", "인원", "비율", "최종 점수\n평균", "최종 점수\n표준편차", "최저", "최고" };
+            if (r.HasPerf) lcols.Add($"수행 평균\n(만점 {r.PerfMax:0.##})");
+            foreach (var e in r.Exams) lcols.Add($"{e}\n원점수 평균");
+            s.Header(lcols.ToArray());
+            foreach (var ls in r.LevelSummaries)
+            {
+                var v = new List<object> { ls.Grade, (double)ls.Count, P(r.Count == 0 ? 0 : (double)ls.Count / r.Count) };
+                if (ls.Count > 0) { v.Add(F1(ls.Mean)); v.Add(F1(ls.Sd)); v.Add(F1(ls.Min)); v.Add(F1(ls.Max)); } else { v.Add("-"); v.Add("-"); v.Add("-"); v.Add("-"); }
+                if (r.HasPerf) v.Add(N1(ls.PerfMean));
+                foreach (var e in r.Exams) v.Add(ls.WrittenMeans.ContainsKey(e) ? (object)F1(ls.WrittenMeans[e]) : "-");
+                s.Cells(v.ToArray());
+            }
+            {
+                var v = new List<object> { "전체", (double)r.Count, P(1), F1(r.Mean), F1(r.Sd), N1(r.Count > 0 ? r.Min : (double?)null), N1(r.Count > 0 ? r.Max : (double?)null) };
+                if (r.HasPerf) { var pt = r.Ranked.Where(x => x.PerfTotal.HasValue).Select(x => x.PerfTotal.Value).ToList(); v.Add(pt.Count > 0 ? (object)F1(pt.Average()) : "-"); }
+                foreach (var e in r.Exams) { var w = r.Ranked.Where(x => x.Written.ContainsKey(e)).Select(x => x.Written[e].Total).ToList(); v.Add(w.Count > 0 ? (object)F1(w.Average()) : "-"); }
+                s.Cells(LightBlue, v.ToArray());
+            }
+            for (int c = 1; c <= lcols.Count; c++) if (s.Ws.Column(c).Width < 11) s.Ws.Column(c).Width = 11;
+
             s.Section($"성취도 경계 학생 (기준 점수 ±{r.Settings.BoundaryRange:0.##}점)");
             s.Header("반", "번호", "이름", "최종 점수", "성취도", "경계", "학년 등수");
             foreach (var st in r.Ranked.Where(x => x.Boundary).OrderByDescending(x => x.Final))
                 s.Cells(Yellow, (double)st.ClassNo, (double)st.Number, st.Name, F2(st.Final.Value), st.Achievement, st.BoundaryNote, (double)st.GradeRank.Value);
             if (!r.Ranked.Any(x => x.Boundary)) s.Text("경계에 있는 학생이 없습니다.");
-            s.Explain("성취도", "성취도경계");
+            s.Explain("성취도", "성취도별통계", "성취도경계");
         }
 
         // ===================== 5. 반별 비교 =====================
@@ -517,6 +541,10 @@ namespace NeisAnalyzer
             {
                 double avgP = choiceItems.Average(i => i.CorrectRate), avgD = choiceItems.Average(i => i.Discrimination ?? 0);
                 s.Text($"평균 정답률 {avgP:P0} → {(avgP >= 0.8 ? "쉬운 시험" : avgP >= 0.6 ? "적절한 난이도" : avgP >= 0.45 ? "어려운 편" : "매우 어려운 시험")} (60~70%가 적절)   /   평균 변별도 {avgD:0.00} → {Glossary.Discrimination(avgD)}   /   변별도 0.2 미만 문항 {choiceItems.Count(i => (i.Discrimination ?? 0) < 0.2)}개, 음수 {choiceItems.Count(i => (i.Discrimination ?? 0) < 0)}개");
+                var hardest = choiceItems.OrderBy(i => i.CorrectRate).Take(3).Select(i => $"{i.Number}번({i.CorrectRate:P0})");
+                var easiest = choiceItems.OrderByDescending(i => i.CorrectRate).Take(3).Select(i => $"{i.Number}번({i.CorrectRate:P0})");
+                int inv = choiceItems.Count(i => i.LevelInversion != null);
+                s.Text($"정답률이 가장 낮은 문항: {string.Join(", ", hardest)}   /   가장 높은 문항: {string.Join(", ", easiest)}   /   성취도 수준 역전 문항 {inv}개" + (inv > 0 ? " → '성취도별 문항' 시트에서 확인" : ""));
             }
             s.Text("색: 빨강 = 변별도 0.1 미만(점검), 노랑 = 어려운 문항(정답률 50% 미만). 변별도는 0.40 이상 매우 좋음 / 0.30 좋음 / 0.20 보통 / 0.10 낮음 / 음수 점검.", false, Color.FromArgb(89, 89, 89));
             s.Row++;
@@ -605,6 +633,41 @@ namespace NeisAnalyzer
             s3.Widths(6, 6, 11, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9);
             s3.Ws.Column(cols3.Count - 1).Width = 9; s3.Ws.Column(cols3.Count).Width = 13;
             s3.Explain("반별문항", "정답률");
+
+            // ---- 성취도별 문항 정답률 ----
+            var s4 = new Sheet(pkg, Trunc("8-4.성취도별 문항" + suffix), $"성취도별 문항 정답률 - {ea.ExamName}", "성취도 A~E 집단이 각 문항을 맞힌 비율입니다. A→E로 갈수록 낮아지는 것이 정상이며, 낮은 집단이 높은 집단보다 15%p 이상 높으면 '수준 역전'(노란색)으로 표시해 문항 검토가 필요함을 알립니다.");
+            s4.Text("정답률 50% 미만 칸은 연한 빨간색입니다. 성취도는 최종 점수(수행+지필) 기준이며, 인원 5명 미만인 집단은 역전 판정에서 제외합니다.", false, Color.FromArgb(89, 89, 89));
+            s4.Row++;
+            var levels = Analyzer.Grades.ToList();
+            var cols4 = new List<string> { "문항", "정답", "학년\n정답률" };
+            foreach (var g in levels) { int n = r.LevelSummaries.First(x => x.Grade == g).Count; cols4.Add($"{g}\n({n}명)"); }
+            cols4.Add("A−E 차이"); cols4.Add("비고");
+            int hr4 = s4.Header(cols4.ToArray());
+            foreach (var it in ea.ItemStats.Where(i => i.Correct.HasValue))
+            {
+                var v = new List<object> { (double)it.Number, (double)it.Correct.Value, P(it.CorrectRate) };
+                foreach (var g in levels) v.Add(it.LevelN.ContainsKey(g) && it.LevelN[g] > 0 ? (object)P(it.LevelCorrectRate[g]) : "-");
+                bool hasA = it.LevelN.ContainsKey("A") && it.LevelN["A"] > 0, hasE = it.LevelN.ContainsKey("E") && it.LevelN["E"] > 0;
+                v.Add(hasA && hasE ? (object)new Fmt(it.LevelCorrectRate["A"] - it.LevelCorrectRate["E"], "+0%;-0%;0%") : "-");
+                v.Add(it.LevelInversion ?? "");
+                s4.Cells(it.LevelInversion != null ? Yellow : (Color?)null, v.ToArray());
+                int row = s4.Row - 1;
+                for (int i = 0; i < levels.Count; i++)
+                    if (it.LevelN.ContainsKey(levels[i]) && it.LevelN[levels[i]] > 0 && it.LevelCorrectRate[levels[i]] < 0.5 && it.LevelInversion == null) s4.Fill(row, 4 + i, Red);
+            }
+            {
+                var v = new List<object> { "평균 정답률", "", P(ea.ItemStats.Where(i => i.Correct.HasValue).Select(i => i.CorrectRate).DefaultIfEmpty(0).Average()) };
+                foreach (var g in levels)
+                {
+                    var rates = ea.ItemStats.Where(i => i.Correct.HasValue && i.LevelN.ContainsKey(g) && i.LevelN[g] > 0).Select(i => i.LevelCorrectRate[g]).ToList();
+                    v.Add(rates.Count > 0 ? (object)P(rates.Average()) : "-");
+                }
+                v.Add(""); v.Add("");
+                s4.Cells(LightBlue, v.ToArray());
+            }
+            s4.Freeze(hr4, 3);
+            s4.Widths(6, 6, 10, 10, 10, 10, 10, 10, 11, 60);
+            s4.Explain("성취도별문항", "성취도", "정답률");
         }
 
         // ===================== 9. 수행 vs 지필 =====================

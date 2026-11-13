@@ -15,9 +15,12 @@ namespace NeisAnalyzer
         static readonly Color Blue = Color.FromArgb(31, 78, 121);
         static readonly Color LightBlue = Color.FromArgb(221, 235, 247);
         static readonly Color Accent = Color.FromArgb(0, 120, 212);
-        static readonly Font BaseFont = new Font("맑은 고딕", 11f);
-        static readonly Font BoldFont = new Font("맑은 고딕", 11f, FontStyle.Bold);
-        static readonly Font TitleFont = new Font("맑은 고딕", 18f, FontStyle.Bold);
+        // 글꼴: 맑은 고딕이 없는 컴퓨터에서는 시스템 기본 글꼴로 대신한다.
+        readonly Font BaseFont, BoldFont, TitleFont, DropFont;
+        // 화면 배율: 다른 컴퓨터의 "텍스트 크기 125%·150%" 설정에서는 글자가 커지므로,
+        // 픽셀로 정한 모든 크기(줄 높이·단추 너비 등)도 같은 비율로 키워야 글자가 겹치지 않는다.
+        readonly float _scale;
+        int S(int px) => (int)Math.Round(px * _scale);
 
         readonly List<DetectedFile> _files = new List<DetectedFile>();
         AnalysisSettings _settings;
@@ -34,14 +37,29 @@ namespace NeisAnalyzer
         Button _btnRun, _btnOpen, _btnOpenFolder, _btnClear, _btnPick;
         ProgressBar _progress;
 
-        public MainForm()
+        public MainForm() : this(0) { }
+
+        /// <param name="simulateScale">자동 시험용. 0이 아니면 그 배율의 화면(예: 1.5 = 150%)처럼 글꼴과 크기를 키워서 그린다.</param>
+        public MainForm(float simulateScale)
         {
+            float dpi; using (var g = CreateGraphics()) dpi = g.DpiX;
+            _scale = simulateScale > 0 ? simulateScale : dpi / 96f;
+            float fontScale = simulateScale > 0 ? simulateScale : 1f;   // 실제 고배율 화면에서는 글꼴이 저절로 커진다
+            string family = FontFamily.Families.Any(f => f.Name == "맑은 고딕") ? "맑은 고딕" : SystemFonts.MessageBoxFont.FontFamily.Name;
+            BaseFont = new Font(family, 11f * fontScale);
+            BoldFont = new Font(family, 11f * fontScale, FontStyle.Bold);
+            TitleFont = new Font(family, 18f * fontScale, FontStyle.Bold);
+            DropFont = new Font(family, 12f * fontScale, FontStyle.Bold);
+
             Text = "나이스 성적 분석";
+            AutoScaleMode = AutoScaleMode.None;   // 크기는 S()로 직접 배율을 적용한다
             Font = BaseFont;
             BackColor = Color.White;
             StartPosition = FormStartPosition.CenterScreen;
-            MinimumSize = new Size(1100, 800);
-            Size = new Size(1240, 860);
+            MinimumSize = new Size(S(900), S(640));
+            var wa = Screen.PrimaryScreen.WorkingArea;
+            Size = new Size(Math.Min(S(1240), wa.Width), Math.Min(S(860), wa.Height));
+            if (S(1240) > wa.Width || S(860) > wa.Height) WindowState = FormWindowState.Maximized;   // 작은 화면(노트북)에서는 최대화
             AllowDrop = true;
             DragEnter += OnDragEnter; DragDrop += OnDragDrop;
             try { Icon = SystemIcons.Application; } catch { }
@@ -51,44 +69,45 @@ namespace NeisAnalyzer
         // ===================== 화면 구성 =====================
         void BuildUi()
         {
-            var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 3, Padding = new Padding(16) };
+            var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 3, Padding = new Padding(S(16)) };
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 55));
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 45));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 134));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));          // 제목 줄은 글자 크기에 맞춰 높이가 정해진다
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, S(70)));
             Controls.Add(root);
 
-            // --- 제목 ---
-            var head = new Panel { Dock = DockStyle.Fill };
-            var title = new Label { Text = "나이스 성적 분석", Font = TitleFont, ForeColor = Blue, AutoSize = true, Location = new Point(0, 0) };
+            // --- 제목 (글자가 커져도 겹치지 않도록 모두 AutoSize) ---
+            var head = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, RowCount = 2, Margin = new Padding(0, 0, 0, S(6)) };
+            head.RowStyles.Add(new RowStyle(SizeType.AutoSize)); head.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            var title = new Label { Text = "나이스 성적 분석", Font = TitleFont, ForeColor = Blue, AutoSize = true, Margin = new Padding(0, 0, 0, S(4)) };
             var sub = new Label
             {
                 Text = "나이스에서 아래 세 가지를 엑셀로 저장한 뒤, 파일 이름을 바꾸지 말고 모두 아래 상자에 끌어다 놓으세요. (반 수만큼 ①·③ 파일을 함께 넣습니다)\n" +
                        "  ① 교과담임 → 정기시험조회/통계 → 정기시험조회 → [교과목별학생답정오표(학급별)]\n" +
                        "  ② 교과담임 → 정기시험조회/통계 → 정기시험조회 → [교과목별일람표조회(전체학급)]  : 필요시 검토(검산)용, 없어도 됨\n" +
                        "  ③ 교과담임 → 수행평가조회/통계 → 수행평가조회 → [강의실별일람표조회-전체영역(학급별)]",
-                AutoSize = false, Location = new Point(2, 38), Size = new Size(1400, 92), ForeColor = Color.FromArgb(64, 64, 64)
+                AutoSize = true, ForeColor = Color.FromArgb(64, 64, 64), Margin = new Padding(S(2), 0, 0, 0)
             };
-            head.Controls.Add(title); head.Controls.Add(sub);
+            head.Controls.Add(title, 0, 0); head.Controls.Add(sub, 0, 1);
             root.Controls.Add(head, 0, 0); root.SetColumnSpan(head, 2);
 
             // --- 왼쪽: 파일 ---
-            var left = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Padding = new Padding(0, 0, 12, 0) };
-            left.RowStyles.Add(new RowStyle(SizeType.Absolute, 110));
-            left.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
+            var left = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Padding = new Padding(0, 0, S(12), 0) };
+            left.RowStyles.Add(new RowStyle(SizeType.Absolute, S(110)));
+            left.RowStyles.Add(new RowStyle(SizeType.Absolute, S(52)));
             left.RowStyles.Add(new RowStyle(SizeType.Percent, 62));
             left.RowStyles.Add(new RowStyle(SizeType.Percent, 38));
             root.Controls.Add(left, 0, 1);
 
-            _dropZone = new Panel { Dock = DockStyle.Fill, BackColor = LightBlue, AllowDrop = true, Margin = new Padding(0, 0, 0, 6) };
+            _dropZone = new Panel { Dock = DockStyle.Fill, BackColor = LightBlue, AllowDrop = true, Margin = new Padding(0, 0, 0, S(6)) };
             _dropZone.Paint += (s, e) =>
             {
                 using (var pen = new Pen(Accent, 2) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dash })
                     e.Graphics.DrawRectangle(pen, 2, 2, _dropZone.Width - 5, _dropZone.Height - 5);
             };
             _dropZone.Resize += (s, e) => _dropZone.Invalidate();
-            _dropLabel = new Label { Text = "📂  여기에 나이스 엑셀 파일을 끌어다 놓으세요 (여러 개 한꺼번에 가능)\n파일이 든 폴더를 통째로 끌어다 놓아도 됩니다.", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, Font = new Font("맑은 고딕", 12f, FontStyle.Bold), ForeColor = Blue, AllowDrop = true };
+            _dropLabel = new Label { Text = "📂  여기에 나이스 엑셀 파일을 끌어다 놓으세요 (여러 개 한꺼번에 가능)\n파일이 든 폴더를 통째로 끌어다 놓아도 됩니다.", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, Font = DropFont, ForeColor = Blue, AllowDrop = true };
             _dropZone.Controls.Add(_dropLabel);
             foreach (Control c in new Control[] { _dropZone, _dropLabel }) { c.DragEnter += OnDragEnter; c.DragDrop += OnDragDrop; }
             _dropLabel.Click += (s, e) => PickFiles();
@@ -100,21 +119,21 @@ namespace NeisAnalyzer
             btnRow.Controls.Add(_btnPick); btnRow.Controls.Add(_btnClear);
             left.Controls.Add(btnRow, 0, 1);
 
-            _fileList = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, GridLines = true, HeaderStyle = ColumnHeaderStyle.Nonclickable, Margin = new Padding(0, 6, 0, 6), AllowDrop = true };
-            _fileList.Columns.Add("상태", 50); _fileList.Columns.Add("종류", 100); _fileList.Columns.Add("내용", 330); _fileList.Columns.Add("파일 이름", 200);
+            _fileList = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, GridLines = true, HeaderStyle = ColumnHeaderStyle.Nonclickable, Margin = new Padding(0, S(6), 0, S(6)), AllowDrop = true };
+            _fileList.Columns.Add("상태", S(50)); _fileList.Columns.Add("종류", S(100)); _fileList.Columns.Add("내용", S(330)); _fileList.Columns.Add("파일 이름", S(200));
             _fileList.DragEnter += OnDragEnter; _fileList.DragDrop += OnDragDrop;
             _fileList.KeyDown += (s, e) => { if (e.KeyCode == Keys.Delete) RemoveSelected(); };
             var menu = new ContextMenuStrip(); menu.Items.Add("선택한 파일 목록에서 빼기", null, (s, e) => RemoveSelected()); _fileList.ContextMenuStrip = menu;
             left.Controls.Add(_fileList, 0, 2);
 
             var warnPanel = new Panel { Dock = DockStyle.Fill };
-            var warnTitle = new Label { Text = "확인이 필요한 사항", Font = BoldFont, ForeColor = Blue, Dock = DockStyle.Top, Height = 26 };
+            var warnTitle = new Label { Text = "확인이 필요한 사항", Font = BoldFont, ForeColor = Blue, Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(0, 0, 0, S(4)) };
             _warnBox = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BackColor = Color.FromArgb(255, 251, 240), BorderStyle = BorderStyle.FixedSingle };
             warnPanel.Controls.Add(_warnBox); warnPanel.Controls.Add(warnTitle);
             left.Controls.Add(warnPanel, 0, 3);
 
             // --- 오른쪽: 설정 ---
-            var right = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(8, 0, 0, 0), BackColor = Color.FromArgb(250, 251, 253) };
+            var right = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(S(8), 0, 0, 0), BackColor = Color.FromArgb(250, 251, 253) };
             root.Controls.Add(right, 0, 1); root.SetColumn(right, 1);
             var settings = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 1, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
             right.Controls.Add(settings);
@@ -132,21 +151,21 @@ namespace NeisAnalyzer
             _examGrid.Columns[0].ReadOnly = true;
             _examGrid.CellValueChanged += (s, e) => UpdateRatioSum();
             settings.Controls.Add(_examGrid);
-            _ratioSum = new Label { AutoSize = true, Font = BoldFont, Margin = new Padding(4, 2, 0, 10) };
+            _ratioSum = new Label { AutoSize = true, Font = BoldFont, Margin = new Padding(S(4), S(2), 0, S(10)) };
             settings.Controls.Add(_ratioSum);
 
             settings.Controls.Add(SmallLabel("성취도 기준 (이 점수 이상이면 해당 성취도, D 미만은 E)"));
-            var gradeRow = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0, 0, 0, 8) };
+            var gradeRow = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0, 0, 0, S(8)) };
             _numA = MakeNum(90); _numB = MakeNum(80); _numC = MakeNum(70); _numD = MakeNum(60);
             foreach (var p in new[] { ("A", _numA), ("B", _numB), ("C", _numC), ("D", _numD) })
             {
-                gradeRow.Controls.Add(new Label { Text = p.Item1 + " :", AutoSize = true, Padding = new Padding(8, 8, 0, 0), Font = BoldFont });
+                gradeRow.Controls.Add(new Label { Text = p.Item1 + " :", AutoSize = true, Padding = new Padding(S(8), S(8), 0, 0), Font = BoldFont });
                 gradeRow.Controls.Add(p.Item2);
             }
             settings.Controls.Add(gradeRow);
 
             settings.Controls.Add(SmallLabel("반올림 방식 (학교 학업성적관리규정에 맞게 선택)"));
-            var roundTbl = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, Margin = new Padding(0, 0, 0, 8) };
+            var roundTbl = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, Margin = new Padding(0, 0, 0, S(8)) };
             _cmbWrittenDec = MakeCombo(new[] { "소수 둘째 자리까지 (나이스 기본)", "소수 첫째 자리까지", "정수" }, 0);
             _cmbFinalDec = MakeCombo(new[] { "소수 둘째 자리까지 (나이스 기본)", "소수 첫째 자리까지", "정수" }, 0);
             _cmbBasis = MakeCombo(new[] { "정수로 반올림한 점수 (생기부 방식: 89.5→90→A)", "반올림 전 점수 그대로 (89.5→B)" }, 0);
@@ -155,39 +174,39 @@ namespace NeisAnalyzer
             AddRow(roundTbl, "성취도 판정 기준", _cmbBasis);
             settings.Controls.Add(roundTbl);
 
-            var bRow = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0, 0, 0, 8) };
-            bRow.Controls.Add(new Label { Text = "성취도 경계 표시 범위: ±", AutoSize = true, Padding = new Padding(4, 8, 0, 0) });
+            var bRow = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0, 0, 0, S(8)) };
+            bRow.Controls.Add(new Label { Text = "성취도 경계 표시 범위: ±", AutoSize = true, Padding = new Padding(S(4), S(8), 0, 0) });
             _numBoundary = MakeNum(1); _numBoundary.DecimalPlaces = 1; _numBoundary.Increment = 0.5m; _numBoundary.Minimum = 0; _numBoundary.Maximum = 10;
             bRow.Controls.Add(_numBoundary);
-            bRow.Controls.Add(new Label { Text = "점", AutoSize = true, Padding = new Padding(4, 8, 0, 0) });
+            bRow.Controls.Add(new Label { Text = "점", AutoSize = true, Padding = new Padding(S(4), S(8), 0, 0) });
             settings.Controls.Add(bRow);
 
-            var privacy = new Label { Text = "🔒 이 프로그램은 인터넷에 연결하지 않으며, 학생 자료는 이 컴퓨터 밖으로 나가지 않습니다.", AutoSize = true, ForeColor = Color.FromArgb(0, 112, 60), Margin = new Padding(4, 8, 0, 0) };
+            var privacy = new Label { Text = "🔒 이 프로그램은 인터넷에 연결하지 않으며, 학생 자료는 이 컴퓨터 밖으로 나가지 않습니다.", AutoSize = true, ForeColor = Color.FromArgb(0, 112, 60), Margin = new Padding(S(4), S(8), 0, 0) };
             settings.Controls.Add(privacy);
 
             // --- 아래: 실행 ---
             var bottom = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, RowCount = 1 };
-            bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220));
-            bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 180));
-            bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
+            bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, S(220)));
+            bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, S(180)));
+            bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, S(150)));
             bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 200));
+            bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, S(200)));
             _btnRun = MakeButton("▶  분석 시작", 210, true); _btnRun.Click += async (s, e) => await RunAnalysis();
             _btnOpen = MakeButton("결과 파일 열기", 170, false); _btnOpen.Enabled = false; _btnOpen.Click += (s, e) => { if (_lastOutput != null && File.Exists(_lastOutput)) Process.Start(new ProcessStartInfo(_lastOutput) { UseShellExecute = true }); };
             _btnOpenFolder = MakeButton("폴더 열기", 140, false); _btnOpenFolder.Enabled = false; _btnOpenFolder.Click += (s, e) => { if (_lastOutput != null && File.Exists(_lastOutput)) Process.Start("explorer.exe", "/select,\"" + _lastOutput + "\""); };
-            _status = new Label { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, ForeColor = Blue, Padding = new Padding(12, 0, 0, 0) };
-            _progress = new ProgressBar { Dock = DockStyle.Fill, Style = ProgressBarStyle.Marquee, Visible = false, Margin = new Padding(0, 20, 0, 20) };
+            _status = new Label { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, ForeColor = Blue, Padding = new Padding(S(12), 0, 0, 0) };
+            _progress = new ProgressBar { Dock = DockStyle.Fill, Style = ProgressBarStyle.Marquee, Visible = false, Margin = new Padding(0, S(20), 0, S(20)) };
             bottom.Controls.Add(_btnRun, 0, 0); bottom.Controls.Add(_btnOpen, 1, 0); bottom.Controls.Add(_btnOpenFolder, 2, 0); bottom.Controls.Add(_status, 3, 0); bottom.Controls.Add(_progress, 4, 0);
             root.Controls.Add(bottom, 0, 2); root.SetColumnSpan(bottom, 2);
 
             RefreshAll();
         }
 
-        static Label SectionLabel(string t) => new Label { Text = t, Font = BoldFont, ForeColor = Blue, AutoSize = true, Margin = new Padding(0, 0, 0, 8) };
-        static Label SmallLabel(string t) => new Label { Text = t, AutoSize = true, Margin = new Padding(2, 4, 0, 2), ForeColor = Color.FromArgb(64, 64, 64) };
-        static Button MakeButton(string text, int width, bool primary)
+        Label SectionLabel(string t) => new Label { Text = t, Font = BoldFont, ForeColor = Blue, AutoSize = true, Margin = new Padding(0, 0, 0, S(8)) };
+        Label SmallLabel(string t) => new Label { Text = t, AutoSize = true, Margin = new Padding(S(2), S(4), 0, S(2)), ForeColor = Color.FromArgb(64, 64, 64) };
+        Button MakeButton(string text, int width, bool primary)
         {
-            var b = new Button { Text = text, Width = width, Height = 44, FlatStyle = FlatStyle.Flat, Font = BoldFont, Margin = new Padding(0, 0, 10, 0), Cursor = Cursors.Hand };
+            var b = new Button { Text = text, Width = S(width), Height = S(44), FlatStyle = FlatStyle.Flat, Font = BoldFont, Margin = new Padding(0, 0, S(10), 0), Cursor = Cursors.Hand };
             if (primary) { b.BackColor = Accent; b.ForeColor = Color.White; b.FlatAppearance.BorderSize = 0; }
             else { b.BackColor = Color.White; b.ForeColor = Blue; b.FlatAppearance.BorderColor = Accent; }
             // 사용할 수 없을 때는 회색으로 보이게
@@ -198,14 +217,14 @@ namespace NeisAnalyzer
             };
             return b;
         }
-        static NumericUpDown MakeNum(decimal v) => new NumericUpDown { Value = v, Minimum = 0, Maximum = 100, Width = 70, DecimalPlaces = 0, Font = BaseFont, Margin = new Padding(4) };
-        static ComboBox MakeCombo(string[] items, int idx) { var c = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 340, Font = BaseFont }; c.Items.AddRange(items); c.SelectedIndex = idx; return c; }
-        static void AddRow(TableLayoutPanel t, string label, Control c) { int r = t.RowCount++; t.Controls.Add(new Label { Text = label, AutoSize = true, Padding = new Padding(4, 8, 8, 0) }, 0, r); t.Controls.Add(c, 1, r); }
-        static DataGridView MakeGrid(string[] cols, int height)
+        NumericUpDown MakeNum(decimal v) => new NumericUpDown { Value = v, Minimum = 0, Maximum = 100, Width = S(70), DecimalPlaces = 0, Font = BaseFont, Margin = new Padding(S(4)) };
+        ComboBox MakeCombo(string[] items, int idx) { var c = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = S(340), Font = BaseFont }; c.Items.AddRange(items); c.SelectedIndex = idx; return c; }
+        void AddRow(TableLayoutPanel t, string label, Control c) { int r = t.RowCount++; t.Controls.Add(new Label { Text = label, AutoSize = true, Padding = new Padding(S(4), S(8), S(8), 0) }, 0, r); t.Controls.Add(c, 1, r); }
+        DataGridView MakeGrid(string[] cols, int height)
         {
-            var g = new DataGridView { Height = height, Width = 470, AllowUserToAddRows = false, AllowUserToDeleteRows = false, RowHeadersVisible = false, BackgroundColor = Color.White, BorderStyle = BorderStyle.FixedSingle, Font = BaseFont, Margin = new Padding(0, 0, 0, 6), AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize, EnableHeadersVisualStyles = false };
+            var g = new DataGridView { Height = S(height), Width = S(470), AllowUserToAddRows = false, AllowUserToDeleteRows = false, RowHeadersVisible = false, BackgroundColor = Color.White, BorderStyle = BorderStyle.FixedSingle, Font = BaseFont, Margin = new Padding(0, 0, 0, S(6)), AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize, EnableHeadersVisualStyles = false };
             g.ColumnHeadersDefaultCellStyle.BackColor = Blue; g.ColumnHeadersDefaultCellStyle.ForeColor = Color.White; g.ColumnHeadersDefaultCellStyle.Font = BoldFont;
-            g.RowTemplate.Height = 30;
+            g.RowTemplate.Height = S(30);
             foreach (var c in cols) g.Columns.Add(c, c);
             g.Columns[0].FillWeight = 200;
             g.DataError += (s, e) => { e.ThrowException = false; };

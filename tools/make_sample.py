@@ -5,6 +5,8 @@
 
 사용법:  python make_sample.py <출력폴더> [반 수] [--midterm]
   --midterm 을 주면 중간고사 정오표·일람표도 함께 만든다 (중간·기말 두 고사 테스트용).
+  --subject-total 을 주면 총점 열 머리글을 "영역총점" 대신 "과목총점"으로 쓴다 (영역이 없는 과목의 정오표 형식).
+  --id-first 를 주면 학생 줄에서 학번을 먼저, 반/번호를 뒤에 쓴다 (학교에 따라 순서가 다른 형식).
 """
 import os, random, sys
 import openpyxl
@@ -106,7 +108,9 @@ def write_answer_sheet(path, cls, rows, exam_name, correct, pts, difficulty, ess
         ans = answers_for(ability, correct, difficulty)
         choice = sum(p for a, p in zip(ans, pts) if a == ".")
         essay = round(min(essay_max, max(0, random.gauss(ability * essay_max, essay_max * 0.2)))) if essay_max else 0
-        ws.cell(r, 2, f"{cls}/{num}"); ws.cell(r, 3, float(sid)); ws.cell(r, 4, nm)
+        if ID_FIRST: ws.cell(r, 2, float(sid)); ws.cell(r, 3, f"{cls}/{num}")
+        else: ws.cell(r, 2, f"{cls}/{num}"); ws.cell(r, 3, float(sid))
+        ws.cell(r, 4, nm)
         for i, a in enumerate(ans):
             ws.cell(r, 5 + i, a if not a.isdigit() else float(a))
         ws.cell(r, c_choice, float(choice)); ws.cell(r, c_essay, float(essay)); ws.cell(r, c_etc, 0.0); ws.cell(r, c_total, float(choice + essay))
@@ -131,7 +135,9 @@ def write_perf(path, cls, rows):
     r = 7
     perf = {}
     for num, sid, nm, ability, status in rows:
-        ws.cell(r, 2, f"{cls}/{num}"); ws.cell(r, 3, float(sid)); ws.cell(r, 4, nm)
+        if ID_FIRST: ws.cell(r, 2, float(sid)); ws.cell(r, 3, f"{cls}/{num}")
+        else: ws.cell(r, 2, f"{cls}/{num}"); ws.cell(r, 3, float(sid))
+        ws.cell(r, 4, nm)
         if status == "전체면제":
             for c in cols: ws.cell(r, c, "면제")
             r += 1; continue
@@ -187,7 +193,13 @@ def write_table(path, exam_name, classes, results_by_class):
     ws.cell(r + 4, 10, 1.0); ws.cell(r + 4, 12, "/"); ws.cell(r + 4, 13, 1.0); ws.cell(r + 4, 16, "예시중학교")
     wb.save(path)
 
+SUBJECT_TOTAL = False
+ID_FIRST = False
+
 def main():
+    global SUBJECT_TOTAL, ID_FIRST
+    SUBJECT_TOTAL = "--subject-total" in sys.argv
+    ID_FIRST = "--id-first" in sys.argv
     out = sys.argv[1] if len(sys.argv) > 1 else "sample"
     num_classes = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 6
     midterm = "--midterm" in sys.argv

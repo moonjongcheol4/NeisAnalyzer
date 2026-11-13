@@ -16,6 +16,15 @@ namespace NeisAnalyzer
         public static DetectedFile Detect(string path)
         {
             var d = new DetectedFile { Path = path };
+            string ext = Path.GetExtension(path).ToLowerInvariant();
+            if (ext != ".xlsx" && ext != ".xlsm")
+            {
+                d.Kind = NeisFileKind.Unknown;
+                d.Error = ext == ".xls"
+                    ? "옛 엑셀 형식(.xls)은 읽을 수 없습니다. 나이스 저장 화면에서 'XLS data'(.xlsx)를 골라 다시 저장하세요."
+                    : $"엑셀(.xlsx) 파일이 아니라서 읽지 않습니다({ext}). PDF는 쓸 수 없고, 나이스에서 엑셀(XLS data)로 저장한 파일을 넣으세요.";
+                return d;
+            }
             try
             {
                 using (var pkg = OpenReadOnly(path))
@@ -34,7 +43,9 @@ namespace NeisAnalyzer
             catch (Exception ex)
             {
                 d.Kind = NeisFileKind.Unknown;
-                d.Error = ex.Message;
+                d.Error = ex.Message.Contains("Package") || ex.Message.Contains("encrypted") || ex is InvalidDataException
+                    ? "엑셀 파일로 열 수 없습니다(손상되었거나 암호가 걸린 파일). 나이스에서 엑셀(XLS data)로 다시 저장해 보세요."
+                    : ex.Message;
             }
             return d;
         }
@@ -69,7 +80,7 @@ namespace NeisAnalyzer
                             Match m;
                             if ((m = Regex.Match(tok, @"(\d{4})\s*학년도")).Success) h.Year = int.Parse(m.Groups[1].Value);
                             else if ((m = Regex.Match(tok, @"(\d+)\s*학기")).Success) h.Semester = int.Parse(m.Groups[1].Value);
-                            else if (tok.Contains("고사")) h.ExamName = tok;
+                            else if (h.ExamName == null && (tok.Contains("고사") || tok.Contains("시험") || Regex.IsMatch(tok, @"^\d+\s*차"))) h.ExamName = tok;   // "3학년 기말고사", "1차 시험", "2차 지필평가" 등
                             else if ((m = Regex.Match(tok, @"(\d+)\s*학년")).Success) h.Grade = int.Parse(m.Groups[1].Value);
                             else if ((m = Regex.Match(tok, @"^(\d+)\s*(반|강의실)$")).Success) h.ClassNo = int.Parse(m.Groups[1].Value);
                             else if (tok == "주간" || tok == "야간") { }
@@ -94,6 +105,18 @@ namespace NeisAnalyzer
         static string Compact(string t) => Regex.Replace(t ?? "", @"\s+", "");
 
         // ---------- 정오표 ----------
+        /// <summary>학생 줄에서 "반/번호"가 든 열과 학번 열을 정한다. 머리글은 "반/번호" 하나만 있고(두 칸 병합), 실제 값의 순서는 학교마다 다르다.</summary>
+        static void LocateKeyCols(Grid g, int firstDataRow, int hdrCol, out int classCol, out int idCol)
+        {
+            classCol = hdrCol; idCol = hdrCol + 1;
+            for (int r = firstDataRow; r <= Math.Min(g.MaxRow, firstDataRow + 3); r++)
+            {
+                var a = g.Text(r, hdrCol); var b = g.Text(r, hdrCol + 1);
+                if (a != null && RxClassNum.IsMatch(a)) return;
+                if (b != null && RxClassNum.IsMatch(b)) { classCol = hdrCol + 1; idCol = hdrCol; return; }
+            }
+        }
+
         static AnswerSheetFile ReadAnswerSheet(Grid g, string path)
         {
             var f = new AnswerSheetFile { Path = path, Header = ParseHeader(g, 6) };
@@ -111,8 +134,10 @@ namespace NeisAnalyzer
             int choiceCol = g.FindColInRow(hdrRow, t => Compact(t).StartsWith("선택형"));
             int essayCol = g.FindColInRow(hdrRow, t => Compact(t).StartsWith("서답형"));
             int etcCol = g.FindColInRow(hdrRow, t => Compact(t).StartsWith("기타"));
-            int totalCol = g.FindColInRow(hdrRow, t => Compact(t).StartsWith("영역"));
-            if (choiceCol < 0 || totalCol < 0) throw new Exception("정오표에서 점수 열(선택형·영역총점)을 찾지 못했습니다.");
+            // 총점 열 머리글은 학교·과목 설정에 따라 "영역총점" 또는 "과목총점"으로 나온다. "총점"으로 끝나는 열을 찾는다.
+            int totalCol = g.FindColInRow(hdrRow, t => Compact(t).EndsWith("총점") && !Compact(t).StartsWith("선택형") && !Compact(t).StartsWith("서답형"));
+            if (choiceCol < 0) throw new Exception("정오표에서 '선택형점수' 열을 찾지 못했습니다. 나이스에서 '교과목별 학생답 정오표'를 엑셀(XLS data)로 저장한 파일인지 확인하세요.");
+            if (totalCol < 0) throw new Exception("정오표에서 총점 열(영역총점 또는 과목총점)을 찾지 못했습니다. 나이스에서 '교과목별 학생답 정오표'를 엑셀(XLS data)로 저장한 파일인지 확인하세요.");
 
             var itemCols = new List<int>();
             for (int c = nameCol + 1; c < choiceCol; c++)
@@ -138,9 +163,11 @@ namespace NeisAnalyzer
             if (Math.Abs(choicePts - f.ChoiceMax) > 0.001)
                 f.Warnings.Add($"{f.ClassNo}반 정오표: 선택형 문항 배점 합({choicePts})이 선택형 만점({f.ChoiceMax})과 다릅니다.");
 
+            // 학교에 따라 "반/번호, 학번" 순서이거나 "학번, 반/번호" 순서로 나오므로 첫 학생 줄을 보고 정한다
+            int classCol; LocateKeyCols(g, ptsRow + 1, hdrCol, out classCol, out idCol);
             for (int r = ptsRow + 1; r <= g.MaxRow; r++)
             {
-                var key = g.Text(r, hdrCol);
+                var key = g.Text(r, classCol);
                 if (key == null) break;
                 var m = RxClassNum.Match(key);
                 if (!m.Success) break;
@@ -205,12 +232,14 @@ namespace NeisAnalyzer
                 areaCols.Add(c);
             }
 
+            int classCol = hdrCol;
             for (int r = hdrRow + 1; r <= g.MaxRow; r++)
             {
-                var key = g.Text(r, hdrCol);
-                if (key == null) break;
+                if (r == hdrRow + 1 || f.Rows.Count == 0) LocateKeyCols(g, r, hdrCol, out classCol, out idCol);   // 머리글 아래 빈 줄이 있을 수 있어 첫 학생 줄에서 정한다
+                var key = g.Text(r, classCol);
+                if (key == null) { if (f.Rows.Count == 0) continue; break; }
                 var m = RxClassNum.Match(key);
-                if (!m.Success) break;
+                if (!m.Success) { if (f.Rows.Count == 0) continue; break; }
                 var row = new PerfRow
                 {
                     ClassNo = int.Parse(m.Groups[1].Value),

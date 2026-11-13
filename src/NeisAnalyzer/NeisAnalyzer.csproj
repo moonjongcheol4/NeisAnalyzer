@@ -16,9 +16,9 @@
     <Description>나이스 성적 엑셀 파일을 모아 분석 결과 엑셀을 만들어 주는 프로그램</Description>
     <Company>moonjongcheol4</Company>
     <Copyright>MIT License</Copyright>
-    <Version>1.1.0</Version>
-    <FileVersion>1.1.0.0</FileVersion>
-    <AssemblyVersion>1.1.0.0</AssemblyVersion>
+    <Version>1.1.1</Version>
+    <FileVersion>1.1.1.0</FileVersion>
+    <AssemblyVersion>1.1.1.0</AssemblyVersion>
 
     <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>

@@ -13,3 +13,4 @@ dist/
 # 가짜 이름으로 만든 시연용 파일만 예외
 !tests/sample/*.xlsx
 !tests/sample-midterm/*.xlsx
+!tests/sample-subject-total/*.xlsx

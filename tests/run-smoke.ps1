@@ -9,7 +9,7 @@ if (-not (Test-Path $exe)) { throw "먼저 .\build.ps1 로 빌드하세요." }
 $tmp = Join-Path $env:TEMP "neis-smoke"
 New-Item -ItemType Directory -Force $tmp | Out-Null
 $fail = 0
-foreach ($case in @("sample", "sample-midterm")) {
+foreach ($case in @("sample", "sample-midterm", "sample-subject-total")) {
     $in = Join-Path $root "tests\$case"
     $out = Join-Path $tmp "$case.xlsx"
     if (Test-Path $out) { Remove-Item $out -Force }

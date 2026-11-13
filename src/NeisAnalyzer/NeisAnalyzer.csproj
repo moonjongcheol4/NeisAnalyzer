@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+
+    <AssemblyName>나이스성적분석</AssemblyName>
+    <RootNamespace>NeisAnalyzer</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+
+    <Product>나이스 성적 분석</Product>
+    <AssemblyTitle>나이스 성적 분석</AssemblyTitle>
+    <Description>나이스 성적 엑셀 파일을 모아 분석 결과 엑셀을 만들어 주는 프로그램</Description>
+    <Company>moonjongcheol4</Company>
+    <Copyright>MIT License</Copyright>
+    <Version>1.0.0</Version>
+    <FileVersion>1.0.0.0</FileVersion>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+
+    <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <Deterministic>true</Deterministic>
+    <AutoGenerateBindingRedirects>false</AutoGenerateBindingRedirects>
+    <GenerateSupportedRuntime>false</GenerateSupportedRuntime>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 엑셀 읽기/쓰기 라이브러리 (EPPlus 4.x, LGPL, 무료 재배포 가능) -->
+    <PackageReference Include="EPPlus" Version="4.5.3.3" GeneratePathProperty="true" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- EPPlus.dll을 exe 안에 포함시켜 파일 하나로 실행되게 한다 -->
+    <EmbeddedResource Include="$(PkgEPPlus)\lib\net40\EPPlus.dll" LogicalName="EPPlus.dll" Visible="false" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,15 @@
+# 빌드 산출물
+bin/
+obj/
+build-output/
+dist/
+*.user
+*.suo
+.vs/
+
+# 실제 학생 자료는 절대 저장소에 넣지 않는다
+예시자료/
+*.xlsx
+# 가짜 이름으로 만든 시연용 파일만 예외
+!tests/sample/*.xlsx
+!tests/sample-midterm/*.xlsx

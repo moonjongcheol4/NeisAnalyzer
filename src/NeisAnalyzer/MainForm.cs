@@ -348,7 +348,8 @@ namespace NeisAnalyzer
             if (!(s.A > s.B && s.B > s.C && s.C > s.D)) { MessageBox.Show(this, "성취도 기준은 A > B > C > D 순서여야 합니다.", "기준 확인", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
 
             var first = _files.FirstOrDefault(f => f.Kind != NeisFileKind.Unknown) ?? _files[0];
-            string defName = $"성적분석결과_{first.Header?.Grade}학년_{first.Header?.Subject}_{DateTime.Now:yyyyMMdd_HHmm}.xlsx";
+            // 과목 이름에 "과학:통합과학2(4)"처럼 파일 이름에 쓸 수 없는 글자(: / \ * ? " < > |)가 있을 수 있어 안전한 글자로 바꾼다
+            string defName = SafeFileName($"성적분석결과_{first.Header?.Grade}학년_{first.Header?.Subject}_{DateTime.Now:yyyyMMdd_HHmm}.xlsx");
             string outPath;
             using (var dlg = new SaveFileDialog { Filter = "엑셀 파일 (*.xlsx)|*.xlsx", FileName = defName, InitialDirectory = Path.GetDirectoryName(first.Path), Title = "결과 엑셀 파일 저장 위치" })
             {
@@ -356,6 +357,15 @@ namespace NeisAnalyzer
                 outPath = dlg.FileName;
             }
             await RunAnalysisTo(outPath, s);
+        }
+
+        /// <summary>Windows 파일 이름에 쓸 수 없는 글자를 '_'로 바꾼다. (예: "과학:통합과학2(4)" → "과학_통합과학2(4)")</summary>
+        public static string SafeFileName(string name)
+        {
+            var sb = new System.Text.StringBuilder(name.Length);
+            var bad = Path.GetInvalidFileNameChars();
+            foreach (var ch in name) sb.Append(Array.IndexOf(bad, ch) >= 0 ? '_' : ch);
+            return sb.ToString().Trim().TrimEnd('.');
         }
 
         public async Task<AnalysisResult> RunAnalysisTo(string outPath, AnalysisSettings s)

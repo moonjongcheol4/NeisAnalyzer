@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
-  <assemblyIdentity version="1.2.0.0" name="NeisAnalyzer"/>
+  <assemblyIdentity version="1.2.1.0" name="NeisAnalyzer"/>
 
   <!-- 관리자 권한 없이 실행 -->
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">

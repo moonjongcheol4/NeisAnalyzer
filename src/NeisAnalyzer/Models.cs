@@ -4,7 +4,7 @@ using System.Linq;
 
 namespace NeisAnalyzer
 {
-    public enum NeisFileKind { Unknown, AnswerSheet, PerfSheet, ScoreTable }
+    public enum NeisFileKind { Unknown, AnswerSheet, PerfSheet, ScoreTable, ItemInfoSheet }
 
     /// <summary>파일 상단에서 읽은 학년도·학기·학년·반·고사명·과목</summary>
     public class ExamHeader
@@ -24,6 +24,28 @@ namespace NeisAnalyzer
             if (!string.IsNullOrEmpty(Subject)) s += $" {Subject}";
             return s;
         }
+    }
+
+    /// <summary>문항정보표(출제 교사가 시험 전에 작성)의 문항 한 줄: 내용영역·성취기준·예상 난이도·배점·정답</summary>
+    public class ItemMeta
+    {
+        public int Number;
+        public string Section;        // "선택형" 또는 "서답형"
+        public string Area;           // 내용영역
+        public string Standard;       // 성취기준 (예: "[9과05-01] 물체에 작용하는 힘을 ...")
+        public string Expected;       // 예상 난이도: 어려움 / 보통 / 쉬움 (없으면 null)
+        public double Points;
+        public string CorrectRaw;
+        public string StandardCode => Standard == null ? null : (System.Text.RegularExpressions.Regex.Match(Standard, @"\[[^\]]+\]").Value.Length > 0 ? System.Text.RegularExpressions.Regex.Match(Standard, @"\[[^\]]+\]").Value : Standard);
+    }
+
+    public class ItemInfoFile
+    {
+        public string Path;
+        public ExamHeader Header;     // Year·Semester·Grade·Subject·ExamName(예: "중간고사")
+        public int TotalItems;
+        public List<ItemMeta> Items = new List<ItemMeta>();
+        public List<string> Warnings = new List<string>();
     }
 
     public class ItemInfo
@@ -109,6 +131,7 @@ namespace NeisAnalyzer
         public AnswerSheetFile Answer;
         public PerfFile Perf;
         public ScoreTableFile Table;
+        public ItemInfoFile Info;
         public string Label
         {
             get
@@ -119,6 +142,7 @@ namespace NeisAnalyzer
                     case NeisFileKind.AnswerSheet: return $"정오표 - {Header.Grade}학년 {Header.ClassNo}{(Header.LectureWord || Answer.MixedCount > 0 ? "강의실" : "반")} {Header.ExamName} ({Header.Subject}, 문항 {Answer.Items.Count}개, 학생 {Answer.Rows.Count}명{(Answer.MixedCount > 0 ? ", 여러 반 섞임" : "")})";
                     case NeisFileKind.PerfSheet: return $"수행평가 - {Header.Grade}학년 {Header.ClassNo}{(Perf.MixedCount > 0 ? "강의실" : "반")} ({Header.Subject}, 영역 {Perf.Areas.Count}개, 학생 {Perf.Rows.Count}명{(Perf.MixedCount > 0 ? ", 여러 반 섞임" : "")})";
                     case NeisFileKind.ScoreTable: return $"일람표(검산용) - {Header.Grade}학년 전체 {Header.ExamName} ({Header.Subject}, {Table.Cells.Count}개 반)";
+                    case NeisFileKind.ItemInfoSheet: return $"문항정보표 - {Header.Grade}학년 {Header.ExamName} ({Header.Subject}, 문항 {Info.Items.Count}개, 예상 난이도 어려움 {Info.Items.Count(i => i.Expected == "어려움")}·보통 {Info.Items.Count(i => i.Expected == "보통")}·쉬움 {Info.Items.Count(i => i.Expected == "쉬움")})";
                     default: return "알 수 없는 파일 (나이스 정오표·수행평가·일람표가 아님)";
                 }
             }

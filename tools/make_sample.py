@@ -7,6 +7,7 @@
   --midterm 을 주면 중간고사 정오표·일람표도 함께 만든다 (중간·기말 두 고사 테스트용).
   --subject-total 을 주면 총점 열 머리글을 "영역총점" 대신 "과목총점"으로 쓴다 (영역이 없는 과목의 정오표 형식).
   --id-first 를 주면 학생 줄에서 학번을 먼저, 반/번호를 뒤에 쓴다 (학교에 따라 순서가 다른 형식).
+  --iteminfo 를 주면 고사마다 문항정보표(교사 예상 난이도·내용영역·성취기준)도 만든다.
   --lecture 를 주면 고교학점제 형식으로 만든다: 파일이 "N 강의실"이고 한 강의실에 여러 행정반 학생이 섞여 있다.
             (강의실 k = k반 홀수 번호 + 다음 반 짝수 번호, 고사명 "1차 시험")
 """
@@ -172,6 +173,46 @@ def write_perf(path, cls, rows):
     wb.save(path)
     return perf
 
+AREAS_INFO = [("과학에서의 힘", "[9과05-01] 물체에 작용하는 힘을 화살표를 이용하여 나타내고, 힘의 크기와 방향을 설명할 수 있다."),
+              ("힘을 나타내는 방법", "[9과05-01] 물체에 작용하는 힘을 화살표를 이용하여 나타내고, 힘의 크기와 방향을 설명할 수 있다."),
+              ("중력", "[9과05-02] 중력, 탄성력, 마찰력, 부력을 이해하고, 각 힘의 특징을 설명할 수 있다."),
+              ("탄성력", "[9과05-02] 중력, 탄성력, 마찰력, 부력을 이해하고, 각 힘의 특징을 설명할 수 있다."),
+              ("마찰력", "[9과05-02] 중력, 탄성력, 마찰력, 부력을 이해하고, 각 힘의 특징을 설명할 수 있다."),
+              ("부력", "[9과05-02] 중력, 탄성력, 마찰력, 부력을 이해하고, 각 힘의 특징을 설명할 수 있다."),
+              ("알짜힘", "[9과05-03] 알짜힘이 0이 아닐 때 물체의 운동 상태가 변함을 알고, 이를 설명할 수 있다.")]
+
+def write_iteminfo(path, exam_short, correct, pts, difficulty, essay_max):
+    """문항정보표: 실제 나이스 양식과 같은 셀 위치(제목 5행, 머리말 8행, 머리글 12~13행, 쪽 나눔 줄 포함)."""
+    wb = openpyxl.Workbook(); ws = wb.active; ws.title = "sheet1"
+    ws["B2"] = f"( {SUBJECT} ) 과목"
+    ws["M3"] = "계"; ws["O3"] = "부 장"; ws["S3"] = "교 감"; ws["V3"] = "교 장"
+    ws["B5"] = " 문  항  정  보  표"; ws["E5"] = "(과목 코드 : 06)"
+    ws["B8"] = f"{YEAR}년도 {SEM}학기 {exam_short}"; ws["F8"] = f"{GRADE}학년"; ws["Q8"] = f"총 문항수 {len(correct)} 문항"
+    ws["B9"] = f"고사일시 {YEAR}년 10월 15일 1교시"; ws["J9"] = "공동출제자"; ws["N9"] = "홍길동 (인)  김철수 (인)"
+    ws["B10"] = f"총점 100.00 점"; ws["J10"] = f"선택형 {100 - essay_max:.2f} 점  서답형 {essay_max:.2f} 점"
+    ws["B11"] = "선택형 문항"
+    ws.cell(12, 2, "문항번호"); ws.cell(12, 3, "내용영역"); ws.cell(12, 4, "성취기준"); ws.cell(12, 16, "난이도"); ws.cell(12, 21, "배점"); ws.cell(12, 23, "정답")
+    ws.cell(13, 16, "어려움"); ws.cell(13, 18, "보통"); ws.cell(13, 20, "쉬움")
+    r = 14
+    counts = {"어려움": 0, "보통": 0, "쉬움": 0}
+    for i, (ans, p, d) in enumerate(zip(correct, pts, difficulty)):
+        if i == 13:   # 실제 파일처럼 중간에 쪽 나눔 줄이 끼어 있다
+            ws.cell(r, 7, 1.0); ws.cell(r, 8, "/"); ws.cell(r, 9, 2.0); ws.cell(r, 12, "예시중학교"); r += 2
+            ws.cell(r, 4, "다."); r += 1
+        exp = "쉬움" if d >= 0.75 else "보통" if d >= 0.45 else "어려움"
+        if random.random() < 0.25: exp = random.choice(["어려움", "보통", "쉬움"])   # 교사 예상이 빗나가는 문항
+        counts[exp] += 1
+        area, std = AREAS_INFO[i % len(AREAS_INFO)]
+        ws.cell(r, 2, float(i + 1)); ws.cell(r, 3, area); ws.cell(r, 4, std)
+        ws.cell(r, {"어려움": 16, "보통": 18, "쉬움": 20}[exp], "○")
+        ws.cell(r, 21, float(p)); ws.cell(r, 23, float(ans))
+        r += 1
+    ws.cell(r, 2, "총합계"); ws.cell(r, 16, float(counts["어려움"])); ws.cell(r, 18, float(counts["보통"])); ws.cell(r, 20, float(counts["쉬움"])); ws.cell(r, 21, float(sum(pts))); ws.cell(r, 23, "-")
+    n = len(correct)
+    ws.cell(r + 1, 2, "비율(%)"); ws.cell(r + 1, 16, round(counts["어려움"] / n * 100, 1)); ws.cell(r + 1, 18, round(counts["보통"] / n * 100, 1)); ws.cell(r + 1, 20, round(counts["쉬움"] / n * 100, 1)); ws.cell(r + 1, 21, 100.0); ws.cell(r + 1, 23, "-")
+    ws.cell(r + 3, 7, 2.0); ws.cell(r + 3, 8, "/"); ws.cell(r + 3, 9, 2.0); ws.cell(r + 3, 12, "예시중학교")
+    wb.save(path)
+
 def write_table(path, exam_name, classes, results_by_class):
     wb = openpyxl.Workbook(); ws = wb.active; ws.title = "sheet1"
     ws["L1"] = "2026.11.12."
@@ -222,12 +263,14 @@ def write_table(path, exam_name, classes, results_by_class):
 SUBJECT_TOTAL = False
 ID_FIRST = False
 LECTURE = False
+ITEMINFO = False
 
 def main():
     global SUBJECT_TOTAL, ID_FIRST, LECTURE
     SUBJECT_TOTAL = "--subject-total" in sys.argv
     ID_FIRST = "--id-first" in sys.argv
     LECTURE = "--lecture" in sys.argv
+    ITEMINFO = "--iteminfo" in sys.argv
     out = sys.argv[1] if len(sys.argv) > 1 else "sample"
     num_classes = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 6
     midterm = "--midterm" in sys.argv
@@ -244,14 +287,20 @@ def main():
     exams = [("1차 시험" if LECTURE else "3학년 기말고사", 26, 0)]
     if midterm:
         exams.insert(0, ("3학년 중간고사", 25, 10))   # 중간고사는 25문항 + 서답형 10점
+    specs = []
     for exam_name, n_items, essay in exams:
         correct, pts, diff = make_exam(n_items, essay)
         results = {}
         for cls, rows in classes.items():
             results[cls] = write_answer_sheet(nxt(), cls, rows, exam_name, correct, pts, diff, essay)
         write_table(nxt(), exam_name, classes, results)
+        specs.append((exam_name, correct, pts, diff, essay))
     for cls, rows in classes.items():
         write_perf(nxt(), cls, rows)
+    if ITEMINFO:   # 기존 파일 이름이 바뀌지 않도록 맨 마지막에 만든다
+        for exam_name, correct, pts, diff, essay in specs:
+            short = "중간고사" if "중간" in exam_name else "기말고사" if "기말" in exam_name else exam_name
+            write_iteminfo(nxt(), short, correct, pts, diff, essay)
     print(f"만든 폴더: {out}  (반 {num_classes}개, 고사 {len(exams)}개, 파일 {len(os.listdir(out))}개)")
 
 if __name__ == "__main__":

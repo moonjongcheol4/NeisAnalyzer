@@ -59,6 +59,10 @@ namespace NeisAnalyzer
         public Dictionary<string, int> LevelN = new Dictionary<string, int>();
         public Dictionary<string, double> LevelCorrectRate = new Dictionary<string, double>();
         public string LevelInversion;    // 예: "수준 역전: D가 B보다 20%p 높음" (없으면 null)
+        // 문항정보표(있을 때)
+        public string Area, Standard, Expected;   // 내용영역, 성취기준, 교사 예상 난이도
+        public int? ExpectedGap => Expected == null || Difficulty == null ? (int?)null : DifficultyLevel(Difficulty) - DifficultyLevel(Expected);   // +면 예상보다 어려웠음
+        public static int DifficultyLevel(string d) => d == "어려움" ? 2 : d == "보통" ? 1 : 0;
     }
 
     /// <summary>성취도(A~E)별 인원·평균·표준편차 (KICE 성취도분석표와 같은 구성)</summary>
@@ -83,6 +87,7 @@ namespace NeisAnalyzer
         public double Mean, Sd;        // 지필 원점수(영역 총점)
         public Dictionary<int, ClassStat> ClassStats = new Dictionary<int, ClassStat>();   // 정오표로 계산한 반별 통계
         public ScoreTableFile Table;   // 검산용 일람표(있으면)
+        public ItemInfoFile Info;      // 문항정보표(있으면): 예상 난이도·내용영역·성취기준
         public List<VerifyRow> Verify = new List<VerifyRow>();
         public List<string> VerifyStudentIssues = new List<string>();
         public bool? VerifyAllMatch;
@@ -180,6 +185,7 @@ namespace NeisAnalyzer
             var answers = ok.Where(f => f.Kind == NeisFileKind.AnswerSheet).ToList();
             var perfs = ok.Where(f => f.Kind == NeisFileKind.PerfSheet).ToList();
             var tables = ok.Where(f => f.Kind == NeisFileKind.ScoreTable).ToList();
+            var infos = ok.Where(f => f.Kind == NeisFileKind.ItemInfoSheet).ToList();
             foreach (var dup in answers.GroupBy(f => (f.Header.ExamName, f.Header.ClassNo)).Where(g => g.Count() > 1))
                 w.Add($"{dup.Key.ClassNo}{u} {dup.Key.ExamName} 정오표가 {dup.Count()}개 들어 있습니다. 첫 번째 파일만 사용합니다.");
             foreach (var dup in perfs.GroupBy(f => f.Header.ClassNo).Where(g => g.Count() > 1))
@@ -212,10 +218,27 @@ namespace NeisAnalyzer
             foreach (var t in tables)
                 if (!exams.Contains(t.Header.ExamName))
                     w.Add($"일람표의 고사명 [{t.Header.ExamName}]과 일치하는 정오표가 없어 검산에 쓰지 못합니다.");
+            foreach (var i in infos)
+                if (answers.Count > 0 && MatchExam(i.Header.ExamName, exams) == null)
+                    w.Add($"문항정보표의 고사 [{i.Header.ExamName}]에 맞는 정오표를 찾지 못해 예상 난이도 비교를 하지 못합니다.");
+            foreach (var dup in infos.GroupBy(i => MatchExam(i.Header.ExamName, exams) ?? i.Header.ExamName).Where(g => g.Count() > 1))
+                w.Add($"[{dup.Key}] 문항정보표가 {dup.Count()}개 들어 있습니다. 첫 번째 파일만 사용합니다.");
             foreach (var f in ok)
                 foreach (var fw in (f.Answer?.Warnings ?? f.Perf?.Warnings ?? f.Table?.Warnings ?? new List<string>()))
                     w.Add(fw);
             return w;
+        }
+
+        /// <summary>문항정보표의 고사명("중간고사")을 정오표의 고사명("3학년 중간고사", "1차 시험")과 맞춘다. 고사가 하나뿐이면 그것으로 본다.</summary>
+        public static string MatchExam(string infoExam, IEnumerable<string> exams)
+        {
+            var list = exams.Where(e => e != null).ToList();
+            bool hasKey = false;
+            if (infoExam != null)
+                foreach (var key in new[] { "중간", "기말", "1차", "2차", "3차", "4차", "학기말" })
+                    if (infoExam.Contains(key)) { hasKey = true; var hit = list.FirstOrDefault(e => e.Contains(key)); if (hit != null) return hit; }
+            if (hasKey) return null;   // "중간고사" 정보표를 기말고사 정오표에 붙이지 않는다
+            return list.Count == 1 ? list[0] : null;
         }
 
         public static AnalysisResult Analyze(IList<DetectedFile> files, AnalysisSettings s)
@@ -456,6 +479,31 @@ namespace NeisAnalyzer
                 r.ExamAnalyses.Add(ea);
             }
 
+            // ---------- 문항정보표(예상 난이도) 붙이기 ----------
+            foreach (var f in ok.Where(x => x.Kind == NeisFileKind.ItemInfoSheet))
+            {
+                var exam = MatchExam(f.Info.Header.ExamName, r.Exams);
+                var ea = exam == null ? null : r.ExamAnalyses.FirstOrDefault(x => x.ExamName == exam);
+                if (ea == null || ea.Info != null) continue;
+                ea.Info = f.Info;
+                var metas = f.Info.Items.Where(m => m.Section == "선택형").ToList();
+                int choiceCount = ea.ItemStats.Count(i => i.Correct.HasValue);
+                if (metas.Count != choiceCount)
+                    r.Warnings.Add($"[{exam}] 문항정보표의 선택형 문항 수({metas.Count})와 정오표의 선택형 문항 수({choiceCount})가 다릅니다. 번호가 같은 문항끼리만 비교합니다.");
+                var mismatch = new List<string>();
+                foreach (var m in metas)
+                {
+                    var st = ea.ItemStats.FirstOrDefault(i => i.Number == m.Number && i.Correct.HasValue);
+                    if (st == null) continue;
+                    st.Area = m.Area; st.Standard = m.Standard; st.Expected = m.Expected;
+                    int ans;
+                    if (int.TryParse(m.CorrectRaw ?? "", out ans) && ans != st.Correct.Value) mismatch.Add($"{m.Number}번(정보표 {ans}, 정오표 {st.Correct})");
+                    if (m.Points > 0 && Math.Abs(m.Points - st.Points) > 0.001) mismatch.Add($"{m.Number}번 배점(정보표 {m.Points:0.##}, 정오표 {st.Points:0.##})");
+                }
+                if (mismatch.Count > 0)
+                    r.Warnings.Add($"[{exam}] 문항정보표와 정오표의 정답·배점이 다른 문항: {string.Join(", ", mismatch)}. 다른 시험의 문항정보표이거나 정답 정정이 있었는지 확인하세요.");
+            }
+
             // ---------- 관심 학생 표시 ----------
             foreach (var st in r.Students)
             {
@@ -474,6 +522,8 @@ namespace NeisAnalyzer
             }
 
             BuildNotes(r);
+            foreach (var ea in r.ExamAnalyses.Where(x => x.Info != null))
+                r.Notes.Add($"문항정보표({ea.ExamName}): 출제 교사가 시험 전에 적은 예상 난이도(어려움·보통·쉬움)를 실제 정답률로 정한 난이도와 비교했습니다. 실제 난이도는 정답률 {s.EasyCut:P0} 이상 쉬움, {s.HardCut:P0} 이상 보통, 그 미만 어려움 기준입니다.");
             if (r.LectureMode) r.Notes.Add("고교학점제 강의실 모드: 파일 머리말이 '강의실'이거나 한 파일에 여러 반 학생이 섞여 있어, 반 대신 강의실(수업 집단) 단위로 비교했습니다. 학생은 행정반/번호로 식별하고 '반' 열에 행정반, '강의실' 열에 수업 집단을 적었습니다. 검산의 일람표도 강의실 단위로 비교합니다.");
             r.Notes.Add("표준편차는 모집단 방식(인원수 N으로 나눔)으로 계산했습니다. 교육과정평가원(KICE) 성취평가 분석 프로그램과 같은 방식이며, 엑셀 STDEV.S(표본 방식, N−1로 나눔)보다 조금 작게 나옵니다.");
             r.Notes.Add($"성취도별 문항 정답률의 성취도는 최종 점수(수행+지필) 기준 성취도입니다. 낮은 성취도 집단이 높은 성취도 집단보다 {LevelInversionGap:P0} 이상 많이 맞힌 문항은 '수준 역전'으로 표시합니다(두 집단 모두 {LevelInversionMinN}명 이상일 때).");
@@ -672,6 +722,12 @@ namespace NeisAnalyzer
                 if (ea.KR20.HasValue) h.Add($"{pre}시험 신뢰도(KR-20)는 {ea.KR20:0.00}로 {(ea.KR20 >= 0.8 ? "양호" : ea.KR20 >= 0.7 ? "보통" : "낮은 편")}입니다.");
                 var blanks = ea.ItemStats.Sum(i => i.BlankCount);
                 if (blanks > 0) h.Add($"{pre}무표기가 모두 {blanks}건 있습니다.");
+                if (ea.Info != null)
+                {
+                    var cmp = items.Where(i => i.ExpectedGap.HasValue).ToList();
+                    int same = cmp.Count(i => i.ExpectedGap == 0), harder = cmp.Count(i => i.ExpectedGap > 0), easier = cmp.Count(i => i.ExpectedGap < 0);
+                    h.Add($"{pre}문항정보표의 예상 난이도와 실제가 같은 문항 {same}개, 예상보다 어려웠던 문항 {harder}개, 예상보다 쉬웠던 문항 {easier}개입니다." + (harder + easier > cmp.Count / 2 && cmp.Count > 0 ? " 예상과 다른 문항이 절반을 넘으니 난이도 판단 기준을 되짚어 볼 만합니다." : ""));
+                }
                 if (ea.VerifyAllMatch == true) h.Add($"{pre}검산: 정오표로 계산한 {r.Unit}별 응시생수·총점·평균이 나이스 일람표와 모두 일치합니다.");
                 else if (ea.VerifyAllMatch == false) h.Add($"{pre}검산: 일람표와 맞지 않는 항목이 있습니다. '검산' 시트를 확인하세요.");
             }

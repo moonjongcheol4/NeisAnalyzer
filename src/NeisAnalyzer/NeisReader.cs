@@ -32,9 +32,10 @@ namespace NeisAnalyzer
                     var ws = pkg.Workbook.Worksheets.FirstOrDefault(w => w.Dimension != null);
                     if (ws == null) { d.Kind = NeisFileKind.Unknown; return d; }
                     var grid = new Grid(ws);
-                    string title = grid.FindTextInRows(1, 6, t => t.Contains("정오표") || t.Contains("일람표"));
+                    string title = grid.FindTextInRows(1, 8, t => t.Contains("정오표") || t.Contains("일람표") || Compact(t).Contains("문항정보표"));
                     if (title == null) { d.Kind = NeisFileKind.Unknown; return d; }
-                    if (title.Contains("정오표")) { d.Kind = NeisFileKind.AnswerSheet; d.Answer = ReadAnswerSheet(grid, path); d.Header = d.Answer.Header; }
+                    if (Compact(title).Contains("문항정보표")) { d.Kind = NeisFileKind.ItemInfoSheet; d.Info = ReadItemInfo(grid, path); d.Header = d.Info.Header; }
+                    else if (title.Contains("정오표")) { d.Kind = NeisFileKind.AnswerSheet; d.Answer = ReadAnswerSheet(grid, path); d.Header = d.Answer.Header; }
                     else if (title.Contains("수행평가")) { d.Kind = NeisFileKind.PerfSheet; d.Perf = ReadPerf(grid, path); d.Header = d.Perf.Header; }
                     else if (title.Contains("일람표")) { d.Kind = NeisFileKind.ScoreTable; d.Table = ReadScoreTable(grid, path); d.Header = d.Table.Header; }
                     else d.Kind = NeisFileKind.Unknown;
@@ -103,6 +104,68 @@ namespace NeisAnalyzer
         }
 
         static string Compact(string t) => Regex.Replace(t ?? "", @"\s+", "");
+
+        // ---------- 문항정보표 ----------
+        /// <summary>출제 교사가 작성한 문항정보표: 문항별 내용영역·성취기준·예상 난이도(어려움/보통/쉬움 ○표)·배점·정답</summary>
+        static ItemInfoFile ReadItemInfo(Grid g, string path)
+        {
+            var f = new ItemInfoFile { Path = path, Header = new ExamHeader() };
+            for (int r = 1; r <= Math.Min(12, g.MaxRow); r++)
+                for (int c = 1; c <= g.MaxCol; c++)
+                {
+                    var t = g.Text(r, c); if (t == null) continue;
+                    Match m;
+                    if ((m = Regex.Match(t, @"(\d{4})\s*년도\s*(\d)\s*학기\s*(.+)")).Success)
+                    { f.Header.Year = int.Parse(m.Groups[1].Value); f.Header.Semester = int.Parse(m.Groups[2].Value); f.Header.ExamName = m.Groups[3].Value.Trim(); }
+                    else if ((m = Regex.Match(t, @"^\s*(\d+)\s*학년\s*$")).Success) f.Header.Grade = int.Parse(m.Groups[1].Value);
+                    else if ((m = Regex.Match(t, @"\(\s*(.+?)\s*\)\s*과목")).Success) f.Header.Subject = m.Groups[1].Value.Trim();
+                    else if ((m = Regex.Match(t, @"총\s*문항\s*수\s*(\d+)")).Success) f.TotalItems = int.Parse(m.Groups[1].Value);
+                }
+            if (f.Header.ExamName == null) throw new Exception("문항정보표 머리말에서 '○○년도 ○학기 ○○고사'를 찾지 못했습니다.");
+
+            int hdrRow = g.FindRow(t => Compact(t) == "문항번호");
+            if (hdrRow < 0) throw new Exception("문항정보표에서 '문항번호' 머리글을 찾지 못했습니다.");
+            while (hdrRow > 0)
+            {
+                int numCol = g.FindColInRow(hdrRow, t => Compact(t) == "문항번호");
+                int areaCol = g.FindColInRow(hdrRow, t => Compact(t).Contains("내용영역"));
+                int stdCol = g.FindColInRow(hdrRow, t => Compact(t).Contains("성취기준"));
+                int ptsCol = g.FindColInRow(hdrRow, t => Compact(t) == "배점");
+                int ansCol = g.FindColInRow(hdrRow, t => Compact(t) == "정답");
+                int diffRow = hdrRow + 1;
+                int hardCol = g.FindColInRow(diffRow, t => Compact(t) == "어려움");
+                int midCol = g.FindColInRow(diffRow, t => Compact(t) == "보통");
+                int easyCol = g.FindColInRow(diffRow, t => Compact(t) == "쉬움");
+                string section = "선택형";
+                for (int r = hdrRow - 1; r >= Math.Max(1, hdrRow - 2); r--)
+                {
+                    var t = g.Text(r, numCol);
+                    if (t != null && t.Contains("서답형")) { section = "서답형"; break; }
+                    if (t != null && t.Contains("선택형")) break;
+                }
+                int r2 = diffRow + 1;
+                for (; r2 <= g.MaxRow; r2++)
+                {
+                    var label = g.Text(r2, numCol);
+                    if (label != null && (Compact(label).StartsWith("총합계") || Compact(label).StartsWith("합계"))) break;
+                    var n = g.Num(r2, numCol);
+                    if (!n.HasValue) continue;   // 쪽 나눔 줄(학교명, 쪽 번호)은 건너뜀
+                    var meta = new ItemMeta { Number = (int)n.Value, Section = section };
+                    if (areaCol > 0) meta.Area = (g.Text(r2, areaCol) ?? "").Trim();
+                    if (stdCol > 0) meta.Standard = Regex.Replace(g.Text(r2, stdCol) ?? "", @"\s+", " ").Trim();
+                    if (ptsCol > 0) meta.Points = g.Num(r2, ptsCol) ?? 0;
+                    if (ansCol > 0) meta.CorrectRaw = (g.Text(r2, ansCol) ?? "").Trim();
+                    bool hard = hardCol > 0 && !string.IsNullOrWhiteSpace(g.Text(r2, hardCol));
+                    bool mid = midCol > 0 && !string.IsNullOrWhiteSpace(g.Text(r2, midCol));
+                    bool easy = easyCol > 0 && !string.IsNullOrWhiteSpace(g.Text(r2, easyCol));
+                    meta.Expected = hard ? "어려움" : mid ? "보통" : easy ? "쉬움" : null;
+                    f.Items.Add(meta);
+                }
+                hdrRow = g.FindRow(t => Compact(t) == "문항번호", r2 + 1);
+            }
+            if (f.Items.Count == 0) throw new Exception("문항정보표에서 문항 줄을 찾지 못했습니다.");
+            return f;
+        }
 
         // ---------- 정오표 ----------
         /// <summary>학생 줄에서 "반/번호"가 든 열과 학번 열을 정한다. 머리글은 "반/번호" 하나만 있고(두 칸 병합), 실제 값의 순서는 학교마다 다르다.</summary>

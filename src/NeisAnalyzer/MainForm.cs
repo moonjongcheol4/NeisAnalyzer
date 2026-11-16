@@ -86,7 +86,8 @@ namespace NeisAnalyzer
                 Text = "나이스에서 아래 세 가지를 엑셀로 저장한 뒤, 파일 이름을 바꾸지 말고 모두 아래 상자에 끌어다 놓으세요. (반 수만큼 ①·③ 파일을 함께 넣습니다)\n" +
                        "  ① 교과담임 → 정기시험조회/통계 → 정기시험조회 → [교과목별학생답정오표(학급별)]\n" +
                        "  ② 교과담임 → 정기시험조회/통계 → 정기시험조회 → [교과목별일람표조회(전체학급)]  : 필요시 검토(검산)용, 없어도 됨\n" +
-                       "  ③ 교과담임 → 수행평가조회/통계 → 수행평가조회 → [강의실별일람표조회-전체영역(학급별)]",
+                       "  ③ 교과담임 → 수행평가조회/통계 → 수행평가조회 → [강의실별일람표조회-전체영역(학급별)]\n" +
+                       "  ④ (선택 사항) 교과담임 → 정기시험 → 문항정보표관리 → [문항정보표]  : 없어도 됨. 넣으면 교사 예상 난이도와 실제 난이도를 비교",
                 AutoSize = true, ForeColor = Color.FromArgb(64, 64, 64), Margin = new Padding(S(2), 0, 0, 0)
             };
             head.Controls.Add(title, 0, 0); head.Controls.Add(sub, 0, 1);
@@ -275,9 +276,9 @@ namespace NeisAnalyzer
         {
             _fileList.BeginUpdate();
             _fileList.Items.Clear();
-            foreach (var d in _files.OrderBy(f => f.Kind == NeisFileKind.AnswerSheet ? 0 : f.Kind == NeisFileKind.PerfSheet ? 1 : f.Kind == NeisFileKind.ScoreTable ? 2 : 3).ThenBy(f => f.Header?.ExamName).ThenBy(f => f.Header?.ClassNo))
+            foreach (var d in _files.OrderBy(f => f.Kind == NeisFileKind.AnswerSheet ? 0 : f.Kind == NeisFileKind.PerfSheet ? 1 : f.Kind == NeisFileKind.ScoreTable ? 2 : f.Kind == NeisFileKind.ItemInfoSheet ? 3 : 4).ThenBy(f => f.Header?.ExamName).ThenBy(f => f.Header?.ClassNo))
             {
-                string kind = d.Kind == NeisFileKind.AnswerSheet ? "정오표" : d.Kind == NeisFileKind.PerfSheet ? "수행평가" : d.Kind == NeisFileKind.ScoreTable ? "일람표(검산)" : "알 수 없음";
+                string kind = d.Kind == NeisFileKind.AnswerSheet ? "정오표" : d.Kind == NeisFileKind.PerfSheet ? "수행평가" : d.Kind == NeisFileKind.ScoreTable ? "일람표(검산)" : d.Kind == NeisFileKind.ItemInfoSheet ? "문항정보표" : "알 수 없음";
                 string desc = d.Label; int idx = desc.IndexOf(" - "); if (idx > 0) desc = desc.Substring(idx + 3);
                 var item = new ListViewItem(d.Kind == NeisFileKind.Unknown ? "⚠" : "✔") { Tag = d, UseItemStyleForSubItems = false };
                 item.SubItems.Add(kind); item.SubItems.Add(desc); item.SubItems.Add(Path.GetFileName(d.Path));
@@ -297,9 +298,9 @@ namespace NeisAnalyzer
             foreach (var e in _settings.ExamRatios) _examGrid.Rows.Add(e.Key, e.Value.ToString("0.##"));
             UpdateRatioSum();
 
-            int answers = _files.Count(f => f.Kind == NeisFileKind.AnswerSheet), perfs = _files.Count(f => f.Kind == NeisFileKind.PerfSheet), tables = _files.Count(f => f.Kind == NeisFileKind.ScoreTable);
+            int answers = _files.Count(f => f.Kind == NeisFileKind.AnswerSheet), perfs = _files.Count(f => f.Kind == NeisFileKind.PerfSheet), tables = _files.Count(f => f.Kind == NeisFileKind.ScoreTable), infos = _files.Count(f => f.Kind == NeisFileKind.ItemInfoSheet);
             _btnRun.Enabled = answers > 0 || perfs > 0;
-            SetStatus(_files.Count == 0 ? "파일을 끌어다 놓으면 시작합니다." : $"정오표 {answers}개, 수행평가 {perfs}개, 일람표 {tables}개");
+            SetStatus(_files.Count == 0 ? "파일을 끌어다 놓으면 시작합니다." : $"정오표 {answers}개, 수행평가 {perfs}개, 일람표 {tables}개" + (infos > 0 ? $", 문항정보표 {infos}개" : ""));
         }
 
         void UpdateRatioSum()

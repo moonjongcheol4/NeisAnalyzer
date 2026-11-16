@@ -274,6 +274,12 @@ namespace NeisAnalyzer
                 s.Cells(pre + "평균 정답률", P(avgP), avgP >= 0.8 ? "쉬운 시험" : avgP >= 0.6 ? "적절한 난이도" : avgP >= 0.45 ? "어려운 편" : "매우 어려움", "선택형 문항 정답률의 평균. 60~70%가 적절합니다.");
                 int low = items.Count(i => (i.Discrimination ?? 0) < 0.2), neg = items.Count(i => (i.Discrimination ?? 0) < 0);
                 s.Cells(pre + "변별도 낮은 문항 수(0.2 미만)", (double)low, low == 0 ? "없음(좋음)" : low <= items.Count * 0.15 ? "일부(점검)" : "많음(문항 검토 필요)", $"선택형 {items.Count}문항 중 잘하는 학생과 못하는 학생을 가르지 못하는 문항 수. 이 중 음수 {neg}개.");
+                if (ea.Info != null)
+                {
+                    var cmp = items.Where(i => i.ExpectedGap.HasValue).ToList();
+                    int diff = cmp.Count(i => i.ExpectedGap != 0), big = cmp.Count(i => Math.Abs(i.ExpectedGap.Value) >= 2);
+                    s.Cells(pre + "예상 난이도와 다른 문항 수", (double)diff, big > 0 ? $"두 단계 차이 {big}개(점검)" : diff <= cmp.Count * 0.3 ? "출제 의도대로" : "예상과 다른 문항 많음", $"문항정보표의 예상 난이도와 실제 난이도가 다른 문항 수(비교 {cmp.Count}문항 중). '8.문항 분석' 시트의 '예상과 비교' 열 참고.");
+                }
                 int inv = items.Count(i => i.LevelInversion != null);
                 s.Cells(pre + "성취도 수준 역전 문항 수", (double)inv, inv == 0 ? "없음(좋음)" : "문항 검토 필요('성취도별 문항' 시트)", "낮은 성취도 집단이 높은 집단보다 15%p 이상 많이 맞힌 문항 수. 정답 오류나 찍기 쉬운 문항일 수 있습니다.");
             }
@@ -554,27 +560,64 @@ namespace NeisAnalyzer
                 s.Text($"정답률이 가장 낮은 문항: {string.Join(", ", hardest)}   /   가장 높은 문항: {string.Join(", ", easiest)}   /   성취도 수준 역전 문항 {inv}개" + (inv > 0 ? " → '성취도별 문항' 시트에서 확인" : ""));
             }
             s.Text("색: 빨강 = 변별도 0.1 미만(점검), 노랑 = 어려운 문항(정답률 50% 미만). 변별도는 0.40 이상 매우 좋음 / 0.30 좋음 / 0.20 보통 / 0.10 낮음 / 음수 점검.", false, Color.FromArgb(89, 89, 89));
+            bool info = ea.Info != null;
+            var cmpItems = info ? choiceItems.Where(i => i.ExpectedGap.HasValue).ToList() : new List<ItemStat>();
+            if (info)
+            {
+                var harder = cmpItems.Where(i => i.ExpectedGap > 0).Select(i => i.Number + "번"); var easier = cmpItems.Where(i => i.ExpectedGap < 0).Select(i => i.Number + "번");
+                s.Text($"문항정보표(출제 교사 예상 난이도) 비교: 예상대로 {cmpItems.Count(i => i.ExpectedGap == 0)}개 / 예상보다 어려웠던 문항 {cmpItems.Count(i => i.ExpectedGap > 0)}개({(harder.Any() ? string.Join(", ", harder) : "없음")}) / 예상보다 쉬웠던 문항 {cmpItems.Count(i => i.ExpectedGap < 0)}개({(easier.Any() ? string.Join(", ", easier) : "없음")}). '예상과 비교' 열의 빨간색은 두 단계 차이(점검), 노란색은 한 단계 차이입니다.", true, Blue);
+            }
             s.Row++;
-            int hr = s.Header("문항", "정답", "배점", "정답률", "오답률", "무응답률", "복수답안", "난이도", "상위 27%\n정답률", "하위 27%\n정답률", "변별도\n(상-하)", "변별도\n해석", "문항-총점\n상관", "상관\n해석", "매력적 오답\n(번호)", "매력적 오답\n선택 비율", "종합 판정");
+            var hcols = new List<string> { "문항", "정답", "배점", "정답률", "오답률", "무응답률", "복수답안", "난이도" };
+            if (info) hcols.AddRange(new[] { "예상 난이도\n(문항정보표)", "예상과 비교", "내용영역", "성취기준" });
+            hcols.AddRange(new[] { "상위 27%\n정답률", "하위 27%\n정답률", "변별도\n(상-하)", "변별도\n해석", "문항-총점\n상관", "상관\n해석", "매력적 오답\n(번호)", "매력적 오답\n선택 비율", "종합 판정" });
+            int off = info ? 4 : 0;
+            int hr = s.Header(hcols.ToArray());
             foreach (var it in ea.ItemStats)
             {
-                if (!it.Correct.HasValue) { s.Cells((double)it.Number, it.Points > 0 ? "서답형" : "-", it.Points, "", "", "", "", "", "", "", "", "", "", "", "", "", "문항별 자료 없음(서답형)"); continue; }
+                if (!it.Correct.HasValue)
+                {
+                    var blank = new List<object> { (double)it.Number, it.Points > 0 ? "서답형" : "-", it.Points };
+                    while (blank.Count < hcols.Count - 1) blank.Add("");
+                    blank.Add("문항별 자료 없음(서답형)");
+                    s.Cells(blank.ToArray()); continue;
+                }
                 Color? fill = it.Discrimination < 0.1 ? Red : it.Difficulty == "어려움" ? Yellow : (Color?)null;
-                s.Cells(fill, (double)it.Number, (double)it.Correct.Value, it.Points, P(it.CorrectRate), P(it.WrongRate), P(it.BlankRate), P(it.MultiRate), it.Difficulty,
-                    P(it.UpperRate ?? 0), P(it.LowerRate ?? 0), F2(it.Discrimination ?? 0), Glossary.Discrimination(it.Discrimination ?? 0),
+                var v = new List<object> { (double)it.Number, (double)it.Correct.Value, it.Points, P(it.CorrectRate), P(it.WrongRate), P(it.BlankRate), P(it.MultiRate), it.Difficulty };
+                if (info) v.AddRange(new object[] { it.Expected ?? "-", it.ExpectedGap.HasValue ? Glossary.ExpectedCompare(it.ExpectedGap.Value) : "-", it.Area ?? "", it.StandardCodeOf() });
+                v.AddRange(new object[] { P(it.UpperRate ?? 0), P(it.LowerRate ?? 0), F2(it.Discrimination ?? 0), Glossary.Discrimination(it.Discrimination ?? 0),
                     it.PointBiserial.HasValue ? (object)F2(it.PointBiserial.Value) : "-", it.PointBiserial.HasValue ? Glossary.PointBiserial(it.PointBiserial.Value) : "계산 불가",
-                    it.AttractiveWrong.HasValue ? (object)(double)it.AttractiveWrong.Value : "-", P(it.AttractiveWrongRate), Glossary.ItemVerdict(it));
+                    it.AttractiveWrong.HasValue ? (object)(double)it.AttractiveWrong.Value : "-", P(it.AttractiveWrongRate), Glossary.ItemVerdict(it) });
+                s.Cells(fill, v.ToArray());
+                if (info && it.ExpectedGap.HasValue && it.ExpectedGap != 0) s.Fill(s.Row - 1, 10, Math.Abs(it.ExpectedGap.Value) >= 2 ? Red : Yellow);
             }
             s.Freeze(hr, 1);
-            s.Widths(6, 6, 6, 9, 9, 9, 9, 8, 10, 10, 10, 16, 10, 10, 11, 11, 40);
+            var widths = new List<double> { 6, 6, 6, 9, 9, 9, 9, 8 };
+            if (info) widths.AddRange(new double[] { 11, 22, 14, 13 });
+            widths.AddRange(new double[] { 10, 10, 10, 16, 10, 10, 11, 11, 40 });
+            s.Widths(widths.ToArray());
             int first = hr + 1, last = s.Row - 1;
+            if (info && cmpItems.Count > 0)
+            {
+                // 예상 × 실제 난이도 교차표
+                s.Row++;
+                s.Text("예상 난이도(세로) × 실제 난이도(가로) 문항 수  — 대각선(예상대로)에 많을수록 출제 의도대로 된 시험입니다.", true);
+                s.Header("예상 \\ 실제", "쉬움", "보통", "어려움", "합계");
+                foreach (var e in new[] { "쉬움", "보통", "어려움" })
+                {
+                    var row = cmpItems.Where(i => i.Expected == e).ToList();
+                    s.Cells(e, (double)row.Count(i => i.Difficulty == "쉬움"), (double)row.Count(i => i.Difficulty == "보통"), (double)row.Count(i => i.Difficulty == "어려움"), (double)row.Count);
+                }
+                s.Cells(LightBlue, "합계", (double)cmpItems.Count(i => i.Difficulty == "쉬움"), (double)cmpItems.Count(i => i.Difficulty == "보통"), (double)cmpItems.Count(i => i.Difficulty == "어려움"), (double)cmpItems.Count);
+            }
             var ch = s.ChartBelow("items", eChartType.ColumnClustered, "문항별 정답률", 900, 320);
             var sr = ch.Series.Add(s.Ws.Cells[first, 4, last, 4], s.Ws.Cells[first, 1, last, 1]); sr.Header = "정답률";
             ch.Legend.Remove();
             var ch2 = s.ChartBelow("disc", eChartType.ColumnClustered, "문항별 변별도 (0.3 이상이면 좋음, 음수는 점검)", 900, 320);
-            var sr2 = ch2.Series.Add(s.Ws.Cells[first, 11, last, 11], s.Ws.Cells[first, 1, last, 1]); sr2.Header = "변별도";
+            var sr2 = ch2.Series.Add(s.Ws.Cells[first, 11 + off, last, 11 + off], s.Ws.Cells[first, 1, last, 1]); sr2.Header = "변별도";
             ch2.Legend.Remove();
-            s.Explain("정답률", "난이도구분", "상하위정답률", "변별도", "점이연상관", "매력적오답", "KR20", "오답률");
+            if (info) s.Explain("정답률", "난이도구분", "예상난이도", "상하위정답률", "변별도", "점이연상관", "매력적오답", "KR20", "오답률");
+            else s.Explain("정답률", "난이도구분", "상하위정답률", "변별도", "점이연상관", "매력적오답", "KR20", "오답률");
 
             // ---- 답지 반응 분포 ----
             var s2 = new Sheet(pkg, Trunc("8-2.답지 반응" + suffix), $"답지 반응 분포 - {ea.ExamName}", "각 문항에서 ①~⑤를 고른 학생 비율입니다. 파란색이 정답, 빨간색은 가장 많이 고른 오답(매력적 오답)입니다.");
@@ -849,6 +892,12 @@ namespace NeisAnalyzer
             s.Widths(120);
         }
 
+        static string StandardCodeOf(this ItemStat it)
+        {
+            if (string.IsNullOrEmpty(it.Standard)) return "";
+            var m = System.Text.RegularExpressions.Regex.Match(it.Standard, @"\[[^\]]+\]");
+            return m.Success ? m.Value : it.Standard;
+        }
         static string Circled(int o) => o >= 1 && o <= 9 ? ((char)('①' + o - 1)).ToString() : o.ToString();
         static string Trunc(string name) => name.Length > 31 ? name.Substring(0, 31) : name;
     }

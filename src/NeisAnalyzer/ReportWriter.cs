@@ -21,6 +21,7 @@ namespace NeisAnalyzer
 
         public static void Write(AnalysisResult r, string path)
         {
+            _unit = r.Unit;
             using (var pkg = new ExcelPackage())
             {
                 WriteGlossary(pkg, r);
@@ -195,7 +196,13 @@ namespace NeisAnalyzer
         static object N1(double? v) => v.HasValue ? (object)F1(v.Value) : "";
         static object N2(double? v) => v.HasValue ? (object)F2(v.Value) : "";
         static string SubjectTitle(AnalysisResult r) => r.Header == null ? "" : $"{r.Header.Year}학년도 {r.Header.Semester}학기 {r.Header.Grade}학년 {r.Header.Subject} {string.Join("·", r.Exams)}";
-        static string ClassLabel(int c) => c + "반";
+        static string _unit = "반";   // 분석 단위 이름: "반" 또는 "강의실"(고교학점제)
+        static string ClassLabel(int c) => c + _unit;
+        /// <summary>학생 식별 열 머리글: 강의실 모드면 "강의실, 반, 번호, 이름", 아니면 "반, 번호, 이름"</summary>
+        static string[] WhoCols(AnalysisResult r) => r.LectureMode ? new[] { "강의실", "반", "번호", "이름" } : new[] { "반", "번호", "이름" };
+        static object[] WhoVals(AnalysisResult r, Student st) => r.LectureMode ? new object[] { (double)st.ClassNo, (double)st.HomeClassNo, (double)st.Number, st.Name } : new object[] { (double)st.ClassNo, (double)st.Number, st.Name };
+        static object[] Cat(IEnumerable<object> a, params object[] b) => a.Concat(b).ToArray();
+        static string[] Cat(IEnumerable<string> a, params string[] b) => a.Concat(b).ToArray();
 
         // ===================== 0. 읽는 법 (용어 설명) =====================
         static void WriteGlossary(ExcelPackage pkg, AnalysisResult r)
@@ -230,7 +237,7 @@ namespace NeisAnalyzer
             s.Cells("학년도 / 학기", r.Header == null ? "" : $"{r.Header.Year}학년도 {r.Header.Semester}학기");
             s.Cells("학년 / 과목", r.Header == null ? "" : $"{r.Header.Grade}학년 {r.Header.Subject}");
             s.Cells("지필고사", string.Join(", ", r.Exams));
-            s.Cells("반", string.Join(", ", r.Classes.Select(ClassLabel)));
+            s.Cells(_unit, string.Join(", ", r.Classes.Select(ClassLabel)));
             s.Cells("명단 인원 / 분석 인원 / 제외 인원", $"{r.Students.Count}명 / {r.Count}명 / {r.Students.Count - r.Count}명");
             s.Cells("분석 일시", DateTime.Now.ToString("yyyy-MM-dd HH:mm"));
 
@@ -243,8 +250,8 @@ namespace NeisAnalyzer
             foreach (var g in Analyzer.Grades)
                 s.Cells(g, (double)(r.AchievementCounts.ContainsKey(g) ? r.AchievementCounts[g] : 0), P(r.Count == 0 ? 0 : (double)(r.AchievementCounts.ContainsKey(g) ? r.AchievementCounts[g] : 0) / r.Count));
 
-            s.Section("반별 평균 순위");
-            s.Header("순위", "반", "인원", "평균", "학년 평균과 차이");
+            s.Section(_unit + "별 평균 순위");
+            s.Header("순위", _unit, "인원", "평균", "학년 평균과 차이");
             foreach (var c in r.ClassSummaries.Where(c => c.Count > 0).OrderBy(c => c.MeanRank))
                 s.Cells((double)c.MeanRank, ClassLabel(c.ClassNo), (double)c.Count, F1(c.Mean), new Fmt(c.Mean - r.Mean, "+0.0;-0.0;0.0"));
 
@@ -288,15 +295,15 @@ namespace NeisAnalyzer
         static void WriteStudents(ExcelPackage pkg, AnalysisResult r)
         {
             var s = new Sheet(pkg, "2.학생별 성적", "학생별 전체 성적", "학생 한 명이 한 줄입니다. 노란색은 성취도 경계(±" + r.Settings.BoundaryRange.ToString("0.##") + "점), 회색은 등수·통계에서 제외된 학생입니다.");
-            var cols = new List<string> { "반", "번호", "이름" };
+            var cols = new List<string>(WhoCols(r));
             foreach (var a in r.Settings.PerfAreas) cols.Add($"{a.Name}\n({a.Max:0.##}점)");
             if (r.HasPerf) cols.Add($"수행 합계\n({r.PerfMax:0.##}점)");
             foreach (var e in r.Exams) { cols.Add($"{e}\n원점수"); cols.Add($"{e}\n환산({(r.Settings.ExamRatios.ContainsKey(e) ? r.Settings.ExamRatios[e] : 0):0.##}%)"); }
-            cols.AddRange(new[] { "최종 점수", "학년 등수", "반 등수", "성취도", "성취도 경계", "비고" });
+            cols.AddRange(new[] { "최종 점수", "학년 등수", _unit + " 등수", "성취도", "성취도 경계", "비고" });
             int hr = s.Header(cols.ToArray());
             foreach (var st in r.Students)
             {
-                var vals = new List<object> { (double)st.ClassNo, (double)st.Number, st.Name };
+                var vals = new List<object>(WhoVals(r, st));
                 for (int i = 0; i < r.Settings.PerfAreas.Count; i++)
                 {
                     if (st.Perf == null || i >= st.Perf.Scores.Length) vals.Add("");
@@ -318,7 +325,7 @@ namespace NeisAnalyzer
                 vals.Add(st.Included ? (st.Status == "정상" ? "" : st.Status) : "제외: " + st.Status);
                 s.Cells(!st.Included ? Gray : st.Boundary ? Yellow : (Color?)null, vals.ToArray());
             }
-            s.Freeze(hr, 3);
+            s.Freeze(hr, WhoCols(r).Length);
             s.RepeatHeader(hr);
             s.AutoWidths(cols.Count, 7, 30);
             s.Ws.Column(cols.Count).Width = 36;
@@ -330,9 +337,9 @@ namespace NeisAnalyzer
         {
             var s = new Sheet(pkg, "3.등수표", "등수표 (최종 점수 순)", "최종 점수가 높은 순서입니다. 동점이면 같은 등수이고 다음 등수는 건너뜁니다.");
             s.Ws.PrinterSettings.Orientation = eOrientation.Portrait;
-            int hr = s.Header("학년 등수", "반", "번호", "이름", "수행 합계", "지필 환산", "최종 점수", "성취도", "반 등수");
+            int hr = s.Header(Cat(new[] { "학년 등수" }.Concat(WhoCols(r)), "수행 합계", "지필 환산", "최종 점수", "성취도", _unit + " 등수"));
             foreach (var st in r.Ranked)
-                s.Cells(st.Boundary ? Yellow : (Color?)null, (double)st.GradeRank.Value, (double)st.ClassNo, (double)st.Number, st.Name, N(st.PerfTotal), F2(st.WrittenConverted.Values.Sum()), F2(st.Final.Value), st.Achievement, (double)st.ClassRank.Value);
+                s.Cells(st.Boundary ? Yellow : (Color?)null, Cat(new object[] { (double)st.GradeRank.Value }.Concat(WhoVals(r, st)), N(st.PerfTotal), F2(st.WrittenConverted.Values.Sum()), F2(st.Final.Value), st.Achievement, (double)st.ClassRank.Value));
             s.Freeze(hr);
             s.RepeatHeader(hr);
             s.Widths(10, 6, 6, 12, 10, 10, 10, 8, 8);
@@ -395,9 +402,9 @@ namespace NeisAnalyzer
             for (int c = 1; c <= lcols.Count; c++) if (s.Ws.Column(c).Width < 11) s.Ws.Column(c).Width = 11;
 
             s.Section($"성취도 경계 학생 (기준 점수 ±{r.Settings.BoundaryRange:0.##}점)");
-            s.Header("반", "번호", "이름", "최종 점수", "성취도", "경계", "학년 등수");
+            s.Header(Cat(WhoCols(r), "최종 점수", "성취도", "경계", "학년 등수"));
             foreach (var st in r.Ranked.Where(x => x.Boundary).OrderByDescending(x => x.Final))
-                s.Cells(Yellow, (double)st.ClassNo, (double)st.Number, st.Name, F2(st.Final.Value), st.Achievement, st.BoundaryNote, (double)st.GradeRank.Value);
+                s.Cells(Yellow, Cat(WhoVals(r, st), F2(st.Final.Value), st.Achievement, st.BoundaryNote, (double)st.GradeRank.Value));
             if (!r.Ranked.Any(x => x.Boundary)) s.Text("경계에 있는 학생이 없습니다.");
             s.Explain("성취도", "성취도별통계", "성취도경계");
         }
@@ -405,8 +412,8 @@ namespace NeisAnalyzer
         // ===================== 5. 반별 비교 =====================
         static void WriteClassCompare(ExcelPackage pkg, AnalysisResult r)
         {
-            var s = new Sheet(pkg, "5.반별 비교", "반별 비교", "반별 최종 점수 통계와 수행·지필 평균입니다. 표준편차가 크면 반 안의 점수 차이가 크다는 뜻입니다.");
-            var cols = new List<string> { "반", "명단", "분석 인원", "평균", "중앙값", "표준편차", "최고점", "최저점", "평균 순위" };
+            var s = new Sheet(pkg, "5." + _unit + "별 비교", _unit + "별 비교", _unit + "별 최종 점수 통계와 수행·지필 평균입니다. 표준편차가 크면 " + _unit + " 안의 점수 차이가 크다는 뜻입니다.");
+            var cols = new List<string> { _unit, "명단", "분석 인원", "평균", "중앙값", "표준편차", "최고점", "최저점", "평균 순위" };
             foreach (var a in r.Settings.PerfAreas) cols.Add($"{a.Name}\n평균({a.Max:0.##})");
             if (r.HasPerf) cols.Add("수행 합계\n평균");
             foreach (var e in r.Exams) cols.Add($"{e}\n원점수 평균");
@@ -497,7 +504,7 @@ namespace NeisAnalyzer
                 s.Cells(a.Name, a.Max, P(a.Ratio / 100), (double)vals.Count, F1(vals.Average()), P(a.Max == 0 ? 0 : vals.Average() / a.Max), F1(Analyzer.Sd(vals)), (double)full, P((double)full / vals.Count), min, (double)minN, P((double)minN / vals.Count), (double)exempt);
             }
             s.Section("반별 영역 평균");
-            var cols = new List<string> { "반", "인원" }; cols.AddRange(r.Settings.PerfAreas.Select(a => a.Name)); cols.Add("수행 합계");
+            var cols = new List<string> { _unit, "인원" }; cols.AddRange(r.Settings.PerfAreas.Select(a => a.Name)); cols.Add("수행 합계");
             int hr = s.Header(cols.ToArray());
             int first = s.Row;
             foreach (var c in r.ClassSummaries)
@@ -603,9 +610,9 @@ namespace NeisAnalyzer
             s2.Explain("답지반응", "매력적오답", "오답률");
 
             // ---- 반별 문항 정답률 ----
-            var s3 = new Sheet(pkg, Trunc("8-3.반별 문항" + suffix), $"반별 문항 정답률 비교 - {ea.ExamName}", $"반별 정답률이 학년 정답률보다 {r.Settings.ClassItemGap:P0} 이상 낮으면 빨간색, {r.Settings.ClassItemGap:P0} 이상 높으면 초록색입니다. 수업 보완이 필요한 반-단원을 찾는 데 쓰세요.");
+            var s3 = new Sheet(pkg, Trunc("8-3." + _unit + "별 문항" + suffix), $"{_unit}별 문항 정답률 비교 - {ea.ExamName}", $"{_unit}별 정답률이 학년 정답률보다 {r.Settings.ClassItemGap:P0} 이상 낮으면 빨간색, {r.Settings.ClassItemGap:P0} 이상 높으면 초록색입니다. 수업 보완이 필요한 {_unit}-단원을 찾는 데 쓰세요.");
             var classes = ea.ItemStats.SelectMany(i => i.ClassN.Keys).Distinct().OrderBy(c => c).ToList();
-            var cols3 = new List<string> { "문항", "정답", "학년 정답률" }; cols3.AddRange(classes.Select(ClassLabel)); cols3.Add("최저 반"); cols3.Add("최고-최저 차이");
+            var cols3 = new List<string> { "문항", "정답", "학년 정답률" }; cols3.AddRange(classes.Select(ClassLabel)); cols3.Add("최저 " + _unit); cols3.Add("최고-최저 차이");
             int hr3 = s3.Header(cols3.ToArray());
             foreach (var it in ea.ItemStats.Where(i => i.Correct.HasValue))
             {
@@ -624,7 +631,7 @@ namespace NeisAnalyzer
                 }
             }
             {
-                var v = new List<object> { "반 평균 정답률", "", P(ea.ItemStats.Where(i => i.Correct.HasValue).Select(i => i.CorrectRate).DefaultIfEmpty(0).Average()) };
+                var v = new List<object> { _unit + " 평균 정답률", "", P(ea.ItemStats.Where(i => i.Correct.HasValue).Select(i => i.CorrectRate).DefaultIfEmpty(0).Average()) };
                 foreach (var c in classes) v.Add(P(ea.ItemStats.Where(i => i.Correct.HasValue && i.ClassCorrectRate.ContainsKey(c)).Select(i => i.ClassCorrectRate[c]).DefaultIfEmpty(0).Average()));
                 v.Add(""); v.Add("");
                 s3.Cells(LightBlue, v.ToArray());
@@ -677,13 +684,13 @@ namespace NeisAnalyzer
             s.Text($"상관계수(피어슨) = {(r.PerfWrittenCorr.HasValue ? r.PerfWrittenCorr.Value.ToString("0.00") + " → " + Glossary.Correlation(r.PerfWrittenCorr.Value) : "계산 불가")}   (0.7 이상 강함 / 0.4 중간 / 0.2 약함 / 그 미만 거의 없음)   /   학년 평균 차이(수행 비율 − 지필 비율) = {r.AvgPerfWrittenGap:+0.0;-0.0}점", true, Blue);
             s.Row++;
             int chartRow = s.Row; s.Row += 23;   // 산점도 자리를 표 위에 비워 둔다
-            int hr = s.Header("반", "번호", "이름", "수행 합계", "수행 비율(%)", "지필 원점수", "지필 비율(%)", "차이\n(수행-지필)", "상대 차이\n(학년 평균 차이 제외)", "해석");
+            int hr = s.Header(Cat(WhoCols(r), "수행 합계", "수행 비율(%)", "지필 원점수", "지필 비율(%)", "차이\n(수행-지필)", "상대 차이\n(학년 평균 차이 제외)", "해석"));
             int first = s.Row;
             foreach (var st in r.Ranked.Where(x => x.PerfWrittenGapAdj.HasValue).OrderByDescending(x => Math.Abs(x.PerfWrittenGapAdj.Value)))
             {
                 double gap = st.PerfWrittenGap.Value, adj = st.PerfWrittenGapAdj.Value;
                 string note = adj >= Analyzer.GapCut ? "수행에 비해 지필이 유난히 낮음" : adj <= -Analyzer.GapCut ? "지필에 비해 수행이 유난히 낮음" : adj >= Analyzer.GapCut * 0.6 ? "지필이 다소 낮은 편" : adj <= -Analyzer.GapCut * 0.6 ? "수행이 다소 낮은 편" : "";
-                s.Cells(Math.Abs(adj) >= Analyzer.GapCut ? Yellow : (Color?)null, (double)st.ClassNo, (double)st.Number, st.Name, N(st.PerfTotal), F1(st.PerfPercent.Value), N(st.WrittenRawSum), F1(st.WrittenPercent.Value), new Fmt(gap, "+0.0;-0.0;0.0"), new Fmt(adj, "+0.0;-0.0;0.0"), note);
+                s.Cells(Math.Abs(adj) >= Analyzer.GapCut ? Yellow : (Color?)null, Cat(WhoVals(r, st), N(st.PerfTotal), F1(st.PerfPercent.Value), N(st.WrittenRawSum), F1(st.WrittenPercent.Value), new Fmt(gap, "+0.0;-0.0;0.0"), new Fmt(adj, "+0.0;-0.0;0.0"), note));
             }
             int last = s.Row - 1;
             s.Freeze(hr);
@@ -691,7 +698,8 @@ namespace NeisAnalyzer
             if (last >= first)
             {
                 var ch = s.Chart("scatter", eChartType.XYScatter, "수행 비율(가로) vs 지필 비율(세로) — 점 하나가 학생 한 명", chartRow, 1, 560, 420);
-                var sr = ch.Series.Add(s.Ws.Cells[first, 7, last, 7], s.Ws.Cells[first, 5, last, 5]); sr.Header = "학생";
+                int off = WhoCols(r).Length - 3;
+                var sr = ch.Series.Add(s.Ws.Cells[first, 7 + off, last, 7 + off], s.Ws.Cells[first, 5 + off, last, 5 + off]); sr.Header = "학생";
                 ch.Legend.Remove();
                 ((ExcelScatterChartSerie)sr).Marker = eMarkerStyle.Circle;
                 ch.XAxis.Title.Text = "수행 비율(%)"; ch.YAxis.Title.Text = "지필 비율(%)";
@@ -704,17 +712,17 @@ namespace NeisAnalyzer
         static void WriteWatch(ExcelPackage pkg, AnalysisResult r)
         {
             var s = new Sheet(pkg, "10.관심 학생", "관심 학생", "상담이나 확인이 필요한 학생 목록입니다. 사유를 보고 필요한 학생만 골라 보세요.");
-            int hr = s.Header("반", "번호", "이름", "최종 점수", "성취도", "학년 등수", "무표기", "사유");
+            int hr = s.Header(Cat(WhoCols(r), "최종 점수", "성취도", "학년 등수", "무표기", "사유"));
             foreach (var st in r.Students.Where(x => x.Flags.Count > 0))
             {
                 Color? fill = !st.Included ? Gray : st.Achievement == "E" ? Red : st.Boundary ? Yellow : (Color?)null;
-                s.Cells(fill, (double)st.ClassNo, (double)st.Number, st.Name, N2(st.Final), st.Achievement ?? "", st.GradeRank.HasValue ? (object)(double)st.GradeRank.Value : "", (double)st.BlankCount, string.Join(" / ", st.Flags));
+                s.Cells(fill, Cat(WhoVals(r, st), N2(st.Final), st.Achievement ?? "", st.GradeRank.HasValue ? (object)(double)st.GradeRank.Value : "", (double)st.BlankCount, string.Join(" / ", st.Flags)));
             }
             if (!r.Students.Any(x => x.Flags.Count > 0)) s.Text("해당 학생이 없습니다.");
             s.Section("제외 학생 (등수·통계에 넣지 않은 학생)");
-            s.Header("반", "번호", "이름", "제외 사유", "수행 합계", "지필 원점수");
+            s.Header(Cat(WhoCols(r), "제외 사유", "수행 합계", "지필 원점수"));
             foreach (var st in r.Students.Where(x => !x.Included))
-                s.Cells(Gray, (double)st.ClassNo, (double)st.Number, st.Name, st.Status, st.PerfAllExempt ? "면제" : N(st.PerfTotal), st.Written.Count == 0 ? "없음" : string.Join(", ", st.Written.Select(w => $"{w.Key} {w.Value.Total:0.##}")));
+                s.Cells(Gray, Cat(WhoVals(r, st), st.Status, st.PerfAllExempt ? "면제" : N(st.PerfTotal), st.Written.Count == 0 ? "없음" : string.Join(", ", st.Written.Select(w => $"{w.Key} {w.Value.Total:0.##}"))));
             if (!r.Students.Any(x => !x.Included)) s.Text("제외된 학생이 없습니다.");
             s.Freeze(hr);
             s.Widths(6, 6, 12, 10, 8, 10, 8, 70);
@@ -735,11 +743,11 @@ namespace NeisAnalyzer
                 if (corr.HasValue) s.Text($"두 시험 점수의 상관계수 {corr:0.00} → {Glossary.Correlation(corr.Value)} (높을수록 중간에 잘한 학생이 기말도 잘 봄. 0.7 이상이면 순위가 거의 유지됨)");
             }
             s.Row++;
-            int hr = s.Header("반", "번호", "이름", e1, e2, "변화", "비고");
+            int hr = s.Header(Cat(WhoCols(r), e1, e2, "변화", "비고"));
             foreach (var st in both.OrderByDescending(x => x.Written[e2].Total - x.Written[e1].Total))
             {
                 double d = st.Written[e2].Total - st.Written[e1].Total;
-                s.Cells(d >= 15 ? Green : d <= -15 ? Red : (Color?)null, (double)st.ClassNo, (double)st.Number, st.Name, st.Written[e1].Total, st.Written[e2].Total, new Fmt(d, "+0.#;-0.#;0"), d >= 15 ? "크게 상승" : d <= -15 ? "크게 하락" : "");
+                s.Cells(d >= 15 ? Green : d <= -15 ? Red : (Color?)null, Cat(WhoVals(r, st), st.Written[e1].Total, st.Written[e2].Total, new Fmt(d, "+0.#;-0.#;0"), d >= 15 ? "크게 상승" : d <= -15 ? "크게 하락" : ""));
             }
             s.Freeze(hr);
             s.Widths(6, 6, 12, 12, 12, 10, 12);
@@ -755,7 +763,7 @@ namespace NeisAnalyzer
             foreach (var st in r.Students)
             {
                 int top = s.Row;
-                s.Ws.Cells[s.Row, 1].Value = $"{st.ClassNo}반 {st.Number}번  {st.Name}";
+                s.Ws.Cells[s.Row, 1].Value = st.Lecture ? $"{st.HomeClassNo}반 {st.Number}번  {st.Name}   ({st.ClassNo}강의실)" : $"{st.ClassNo}반 {st.Number}번  {st.Name}";
                 s.Ws.Cells[s.Row, 1, s.Row, 8].Merge = true;
                 s.Ws.Cells[s.Row, 1].Style.Font.Bold = true; s.Ws.Cells[s.Row, 1].Style.Font.Size = 12;
                 s.Ws.Cells[s.Row, 1].Style.Fill.PatternType = ExcelFillStyle.Solid; s.Ws.Cells[s.Row, 1].Style.Fill.BackgroundColor.SetColor(LightBlue);
@@ -764,7 +772,7 @@ namespace NeisAnalyzer
                 foreach (var a in r.Settings.PerfAreas) hdr.Add(a.Name);
                 if (r.HasPerf) hdr.Add("수행 합계");
                 foreach (var e in r.Exams) { hdr.Add(e + " 원점수"); hdr.Add(e + " 환산"); }
-                hdr.AddRange(new[] { "최종 점수", "성취도", "학년 등수", "반 등수" });
+                hdr.AddRange(new[] { "최종 점수", "성취도", "학년 등수", _unit + " 등수" });
                 for (int i = 0; i < r.Settings.PerfAreas.Count; i++) val.Add(st.Perf == null || i >= st.Perf.Scores.Length ? "" : st.Perf.Exempt[i] ? "면제" : N(st.Perf.Scores[i]));
                 if (r.HasPerf) val.Add(st.PerfAllExempt ? "면제" : N(st.PerfTotal));
                 foreach (var e in r.Exams) { val.Add(st.Written.ContainsKey(e) ? (object)st.Written[e].Total : "결시/면제"); val.Add(st.WrittenConverted.ContainsKey(e) ? (object)F2(st.WrittenConverted[e]) : ""); }
@@ -804,7 +812,7 @@ namespace NeisAnalyzer
             foreach (var ea in r.ExamAnalyses.Where(e => e.Table != null))
             {
                 s.Section($"{ea.ExamName} — 결과: {(ea.VerifyAllMatch == true ? "모두 일치 ✔" : "불일치 항목 있음 ✘")}");
-                s.Header("반", "응시생수(계산)", "응시생수(일람표)", "총점(계산)", "총점(일람표)", "평균(계산)", "평균(일람표)", "결과");
+                s.Header(_unit, "응시생수(계산)", "응시생수(일람표)", "총점(계산)", "총점(일람표)", "평균(계산)", "평균(일람표)", "결과");
                 foreach (var v in ea.Verify)
                     s.Cells(v.Match ? Green : v.Result == "불일치" ? Red : Gray, ClassLabel(v.ClassNo), v.Result.StartsWith("정오표 없음") ? "-" : (object)(double)v.CalcCount, v.TableCount.HasValue ? (object)(double)v.TableCount.Value : "-", v.Result.StartsWith("정오표 없음") ? "-" : (object)v.CalcSum, N(v.TableSum), v.Result.StartsWith("정오표 없음") ? "-" : (object)F1(v.CalcMean), N1(v.TableMean), v.Result);
                 if (ea.VerifyStudentIssues.Count > 0)
@@ -812,7 +820,7 @@ namespace NeisAnalyzer
                     s.Text("학생별 비교에서 발견된 차이:", true);
                     foreach (var i in ea.VerifyStudentIssues) s.Text("• " + i, false, Color.FromArgb(192, 0, 0));
                 }
-                else s.Text("학생별 점수도 모두 일치합니다.", false, Color.FromArgb(0, 112, 60));
+                else s.Text(r.LectureMode ? "학생별 비교는 강의실 모드에서는 하지 않습니다(일람표의 번호가 여러 반에 걸쳐 겹치기 때문)." : "학생별 점수도 모두 일치합니다.", false, Color.FromArgb(0, 112, 60));
             }
             s.Widths(8, 14, 15, 12, 13, 12, 13, 10);
             s.Explain("검산");

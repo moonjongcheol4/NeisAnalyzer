@@ -7,6 +7,8 @@
   --midterm 을 주면 중간고사 정오표·일람표도 함께 만든다 (중간·기말 두 고사 테스트용).
   --subject-total 을 주면 총점 열 머리글을 "영역총점" 대신 "과목총점"으로 쓴다 (영역이 없는 과목의 정오표 형식).
   --id-first 를 주면 학생 줄에서 학번을 먼저, 반/번호를 뒤에 쓴다 (학교에 따라 순서가 다른 형식).
+  --lecture 를 주면 고교학점제 형식으로 만든다: 파일이 "N 강의실"이고 한 강의실에 여러 행정반 학생이 섞여 있다.
+            (강의실 k = k반 홀수 번호 + 다음 반 짝수 번호, 고사명 "1차 시험")
 """
 import os, random, sys
 import openpyxl
@@ -64,9 +66,19 @@ def make_students(num_classes):
             elif r < 0.05: status = "수행일부면제"
             if num == n and random.random() < 0.5:
                 sid = 2026000000 + random.randint(100, 199)   # 전입생
-            rows.append((num, sid, name(), random.gauss(0.6, 0.18), status))
+            rows.append((num, sid, name(), random.gauss(0.6, 0.18), status, c))
         classes[c] = rows
     return classes
+
+def to_lecture_rooms(classes):
+    """고교학점제: 강의실 k = k반 홀수 번호 + (k+1)반(마지막이면 1반) 짝수 번호. 학생은 한 강의실에만 들어간다."""
+    n = len(classes)
+    rooms = {}
+    for k in range(1, n + 1):
+        nxt = k + 1 if k < n else 1
+        rows = [r for r in classes[k] if r[0] % 2 == 1] + [r for r in classes[nxt] if r[0] % 2 == 0]
+        rooms[k] = sorted(rows, key=lambda r: (r[5], r[0]))
+    return rooms
 
 def answers_for(ability, correct, difficulty):
     out = []
@@ -89,7 +101,8 @@ def write_answer_sheet(path, cls, rows, exam_name, correct, pts, difficulty, ess
     wb = openpyxl.Workbook(); ws = wb.active; ws.title = "sheet1"
     ws["U2"] = "2026.11.12."
     ws["J3"] = "정기시험교과목별 학생답 정오표"
-    ws["B5"] = f"{YEAR}학년도   {SEM}학기   주간 {GRADE}학년   {cls}반   {exam_name}   {SUBJECT}"
+    if LECTURE: ws["B5"] = f"{YEAR}학년도   {SEM}학기   주간      {GRADE}학년      {cls} 강의실   {exam_name}   {SUBJECT}"
+    else: ws["B5"] = f"{YEAR}학년도   {SEM}학기   주간 {GRADE}학년   {cls}반   {exam_name}   {SUBJECT}"
     n = len(correct)
     ws.cell(7, 2, "반/번호"); ws.cell(7, 4, "번호")
     for i in range(n):
@@ -102,19 +115,19 @@ def write_answer_sheet(path, cls, rows, exam_name, correct, pts, difficulty, ess
     ws.cell(9, c_choice, float(sum(pts))); ws.cell(9, c_essay, float(essay_max)); ws.cell(9, c_etc, 0.0); ws.cell(9, c_total, float(sum(pts) + essay_max))
     r = 10
     results = {}
-    for num, sid, nm, ability, status in rows:
+    for num, sid, nm, ability, status, home in rows:
         if status in ("전체면제", "지필결시"):
             continue
         ans = answers_for(ability, correct, difficulty)
         choice = sum(p for a, p in zip(ans, pts) if a == ".")
         essay = round(min(essay_max, max(0, random.gauss(ability * essay_max, essay_max * 0.2)))) if essay_max else 0
-        if ID_FIRST: ws.cell(r, 2, float(sid)); ws.cell(r, 3, f"{cls}/{num}")
-        else: ws.cell(r, 2, f"{cls}/{num}"); ws.cell(r, 3, float(sid))
+        if ID_FIRST: ws.cell(r, 2, float(sid)); ws.cell(r, 3, f"{home}/{num}")
+        else: ws.cell(r, 2, f"{home}/{num}"); ws.cell(r, 3, float(sid))
         ws.cell(r, 4, nm)
         for i, a in enumerate(ans):
             ws.cell(r, 5 + i, a if not a.isdigit() else float(a))
         ws.cell(r, c_choice, float(choice)); ws.cell(r, c_essay, float(essay)); ws.cell(r, c_etc, 0.0); ws.cell(r, c_total, float(choice + essay))
-        results[num] = choice + essay
+        results[(home, num)] = choice + essay
         r += 1
     ws.cell(r + 1, 2, LEGEND)
     ws.cell(r + 3, 20, 1.0); ws.cell(r + 3, 22, "/"); ws.cell(r + 3, 24, 1.0); ws.cell(r + 3, 30, "예시중학교")
@@ -134,9 +147,9 @@ def write_perf(path, cls, rows):
     ws.cell(6, 11, "합계"); ws.cell(6, 15, " 비고")
     r = 7
     perf = {}
-    for num, sid, nm, ability, status in rows:
-        if ID_FIRST: ws.cell(r, 2, float(sid)); ws.cell(r, 3, f"{cls}/{num}")
-        else: ws.cell(r, 2, f"{cls}/{num}"); ws.cell(r, 3, float(sid))
+    for num, sid, nm, ability, status, home in rows:
+        if ID_FIRST: ws.cell(r, 2, float(sid)); ws.cell(r, 3, f"{home}/{num}")
+        else: ws.cell(r, 2, f"{home}/{num}"); ws.cell(r, 3, float(sid))
         ws.cell(r, 4, nm)
         if status == "전체면제":
             for c in cols: ws.cell(r, c, "면제")
@@ -172,17 +185,30 @@ def write_table(path, exam_name, classes, results_by_class):
     for cls in cls_list:
         ws.cell(8, c, float(cls)); colmap[cls] = c
         c += 2 if cls % 3 == 0 else 1          # 일부 열은 병합된 것처럼 한 칸 띄움
-    maxnum = max(num for rows in classes.values() for num, *_ in rows)
-    for num in range(1, maxnum + 1):
-        r = 8 + num
-        ws.cell(r, 2, float(num))
-        for cls in cls_list:
-            status = {row[0]: row[4] for row in classes[cls]}.get(num)
-            if status is None: continue
-            if status in ("전체면제",):
-                ws.cell(r, colmap[cls], "면제")
-            elif num in results_by_class[cls]:
-                ws.cell(r, colmap[cls], float(results_by_class[cls][num]))
+    if LECTURE:
+        # 강의실 단위 일람표(형식 가정): 열마다 그 강의실 학생을 차례로 나열, 번호 열은 일련번호
+        maxnum = max(len(rows) for rows in classes.values())
+        for i in range(1, maxnum + 1):
+            r = 8 + i
+            ws.cell(r, 2, float(i))
+            for cls in cls_list:
+                if i - 1 < len(classes[cls]):
+                    row = classes[cls][i - 1]
+                    key = (row[5], row[0])
+                    if row[4] == "전체면제": ws.cell(r, colmap[cls], "면제")
+                    elif key in results_by_class[cls]: ws.cell(r, colmap[cls], float(results_by_class[cls][key]))
+    else:
+        maxnum = max(num for rows in classes.values() for num, *_ in rows)
+        for num in range(1, maxnum + 1):
+            r = 8 + num
+            ws.cell(r, 2, float(num))
+            for cls in cls_list:
+                status = {row[0]: row[4] for row in classes[cls]}.get(num)
+                if status is None: continue
+                if status in ("전체면제",):
+                    ws.cell(r, colmap[cls], "면제")
+                elif (cls, num) in results_by_class[cls]:
+                    ws.cell(r, colmap[cls], float(results_by_class[cls][(cls, num)]))
     r = 9 + maxnum
     ws.cell(r, 2, "응시생수"); ws.cell(r + 1, 2, "총      점"); ws.cell(r + 2, 2, "평      균")
     for cls in cls_list:
@@ -195,23 +221,27 @@ def write_table(path, exam_name, classes, results_by_class):
 
 SUBJECT_TOTAL = False
 ID_FIRST = False
+LECTURE = False
 
 def main():
-    global SUBJECT_TOTAL, ID_FIRST
+    global SUBJECT_TOTAL, ID_FIRST, LECTURE
     SUBJECT_TOTAL = "--subject-total" in sys.argv
     ID_FIRST = "--id-first" in sys.argv
+    LECTURE = "--lecture" in sys.argv
     out = sys.argv[1] if len(sys.argv) > 1 else "sample"
     num_classes = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 6
     midterm = "--midterm" in sys.argv
     os.makedirs(out, exist_ok=True)
     classes = make_students(num_classes)
+    if LECTURE:
+        classes = to_lecture_rooms(classes)   # 이제 classes[k] = k 강의실 학생들(여러 반 섞임)
     seq = 5432900000000000
     def nxt():
         nonlocal seq
         seq += random.randint(10000000, 99999999)
         return os.path.join(out, f"download-{seq}.xlsx")
 
-    exams = [("3학년 기말고사", 26, 0)]
+    exams = [("1차 시험" if LECTURE else "3학년 기말고사", 26, 0)]
     if midterm:
         exams.insert(0, ("3학년 중간고사", 25, 10))   # 중간고사는 25문항 + 서답형 10점
     for exam_name, n_items, essay in exams:

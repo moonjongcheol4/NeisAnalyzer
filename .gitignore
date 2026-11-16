@@ -14,3 +14,4 @@ dist/
 !tests/sample/*.xlsx
 !tests/sample-midterm/*.xlsx
 !tests/sample-subject-total/*.xlsx
+!tests/sample-lecture/*.xlsx

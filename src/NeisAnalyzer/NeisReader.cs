@@ -82,7 +82,7 @@ namespace NeisAnalyzer
                             else if ((m = Regex.Match(tok, @"(\d+)\s*학기")).Success) h.Semester = int.Parse(m.Groups[1].Value);
                             else if (h.ExamName == null && (tok.Contains("고사") || tok.Contains("시험") || Regex.IsMatch(tok, @"^\d+\s*차"))) h.ExamName = tok;   // "3학년 기말고사", "1차 시험", "2차 지필평가" 등
                             else if ((m = Regex.Match(tok, @"(\d+)\s*학년")).Success) h.Grade = int.Parse(m.Groups[1].Value);
-                            else if ((m = Regex.Match(tok, @"^(\d+)\s*(반|강의실)$")).Success) h.ClassNo = int.Parse(m.Groups[1].Value);
+                            else if ((m = Regex.Match(tok, @"^(\d+)\s*(반|강의실)$")).Success) { h.ClassNo = int.Parse(m.Groups[1].Value); h.LectureWord = m.Groups[2].Value == "강의실"; }
                             else if (tok == "주간" || tok == "야간") { }
                             else if (h.Subject == null && !tok.Contains("강의실")) h.Subject = tok;
                         }
@@ -174,6 +174,7 @@ namespace NeisAnalyzer
                 var row = new AnswerRow
                 {
                     ClassNo = int.Parse(m.Groups[1].Value),
+                    HomeClassNo = int.Parse(m.Groups[1].Value),
                     Number = int.Parse(m.Groups[2].Value),
                     StudentId = g.Text(r, idCol),
                     Name = (g.Text(r, nameCol) ?? "").Trim(),
@@ -183,8 +184,7 @@ namespace NeisAnalyzer
                     EtcScore = etcCol > 0 ? (g.Num(r, etcCol) ?? 0) : 0,
                     Total = g.Num(r, totalCol) ?? 0,
                 };
-                if (row.ClassNo != f.ClassNo)
-                    f.Warnings.Add($"{f.ClassNo}반 정오표 안에 {row.ClassNo}반 학생({row.Name})이 있습니다.");
+                if (row.HomeClassNo != f.ClassNo) f.MixedCount++;   // 고교학점제: 강의실에 여러 반 학생이 섞여 있음 (경고 아님)
                 // 문항별 정오로 선택형 점수를 다시 계산해 파일 값과 비교
                 double recomputed = 0;
                 for (int i = 0; i < f.Items.Count; i++)
@@ -243,6 +243,7 @@ namespace NeisAnalyzer
                 var row = new PerfRow
                 {
                     ClassNo = int.Parse(m.Groups[1].Value),
+                    HomeClassNo = int.Parse(m.Groups[1].Value),
                     Number = int.Parse(m.Groups[2].Value),
                     StudentId = g.Text(r, idCol),
                     Name = (g.Text(r, nameCol) ?? "").Trim(),
@@ -258,6 +259,7 @@ namespace NeisAnalyzer
                     if (n.HasValue) row.Scores[i] = n;
                     else if (t != null && t.Contains("면제")) row.Exempt[i] = true;
                 }
+                if (row.HomeClassNo != f.ClassNo) f.MixedCount++;   // 고교학점제: 강의실에 여러 반 학생이 섞임
                 f.Rows.Add(row);
             }
             return f;

@@ -43,7 +43,7 @@ namespace NeisAnalyzer
                 if (ea.Table == null) { Console.WriteLine($"  {ea.ExamName}: 일람표 없음(검산 생략)"); continue; }
                 Console.WriteLine($"  {ea.ExamName}: {(ea.VerifyAllMatch == true ? "모두 일치" : "불일치 있음")}");
                 foreach (var v in ea.Verify)
-                    Console.WriteLine($"    {v.ClassNo}반  인원 {v.CalcCount}/{v.TableCount}  총점 {v.CalcSum}/{v.TableSum}  평균 {v.CalcMean}/{v.TableMean}  → {v.Result}");
+                    Console.WriteLine($"    {v.ClassNo}{r.Unit}  인원 {v.CalcCount}/{v.TableCount}  총점 {v.CalcSum}/{v.TableSum}  평균 {v.CalcMean}/{v.TableMean}  → {v.Result}");
                 foreach (var i in ea.VerifyStudentIssues) Console.WriteLine("    - " + i);
             }
             Console.WriteLine("== 요약 ==");

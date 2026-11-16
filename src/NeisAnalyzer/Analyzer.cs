@@ -8,7 +8,9 @@ namespace NeisAnalyzer
 
     public class Student
     {
-        public int ClassNo, Number;
+        public int ClassNo, Number;      // ClassNo = 분석 단위(중학교: 반, 고교학점제: 강의실)
+        public int HomeClassNo;          // 학생의 행정반 (중학교에서는 ClassNo와 같음)
+        public bool Lecture;             // 강의실 모드로 만들어진 학생인지
         public string StudentId, Name;
 
         public PerfRow Perf;                       // 수행 자료 (없으면 null)
@@ -32,8 +34,8 @@ namespace NeisAnalyzer
         public double? WrittenRawSum;    // 지필 원점수 합(고사가 둘이면 평균 아님, 합)
         public double? PerfPercent, WrittenPercent, PerfWrittenGap, PerfWrittenGapAdj;
 
-        public string Key => ClassNo + "/" + Number;
-        public string Label => $"{ClassNo}반 {Number}번 {Name}";
+        public string Key => HomeClassNo + "/" + Number;   // 행정반/번호 = 학년 안에서 유일한 학생 식별자
+        public string Label => Lecture ? $"{HomeClassNo}반 {Number}번 {Name}({ClassNo}강의실)" : $"{ClassNo}반 {Number}번 {Name}";
     }
 
     public class ItemStat
@@ -118,6 +120,8 @@ namespace NeisAnalyzer
         public List<ExamAnalysis> ExamAnalyses = new List<ExamAnalysis>();
         public List<ClassSummary> ClassSummaries = new List<ClassSummary>();
         public List<LevelSummary> LevelSummaries = new List<LevelSummary>();
+        public bool LectureMode;                       // 고교학점제: 파일 단위가 행정반이 아니라 강의실(수업 집단)
+        public string Unit => LectureMode ? "강의실" : "반";
         public List<string> Warnings = new List<string>();
         public List<string> Notes = new List<string>();     // 분석 기준 안내에 넣을 설명
         public List<string> Highlights = new List<string>(); // "이번 시험의 특징"
@@ -153,11 +157,17 @@ namespace NeisAnalyzer
             return s;
         }
 
+        /// <summary>고교학점제 파일인지 판단한다: 정오표 머리말이 "강의실"이거나, 파일의 반 번호와 다른 반 학생이 섞여 있으면 강의실 모드.</summary>
+        public static bool IsLectureMode(IEnumerable<DetectedFile> files) =>
+            files.Any(f => (f.Kind == NeisFileKind.AnswerSheet && (f.Header.LectureWord || f.Answer.MixedCount > 0)) || (f.Kind == NeisFileKind.PerfSheet && f.Perf.MixedCount > 0));
+
         /// <summary>파일 묶음을 검사해 빠진 반·중복·섞임을 경고로 만든다.</summary>
         public static List<string> CheckFiles(IList<DetectedFile> files)
         {
             var w = new List<string>();
             var ok = files.Where(f => f.Kind != NeisFileKind.Unknown).ToList();
+            string u = IsLectureMode(ok) ? "강의실" : "반";
+            if (u == "강의실") w.Add("고교학점제 강의실 파일로 판단했습니다. 반 대신 강의실(수업 집단) 단위로 비교하고, 학생의 반·번호는 그대로 표시합니다. 일람표가 강의실이 아닌 행정반 기준이면 검산이 맞지 않을 수 있습니다.");
             foreach (var f in files.Where(f => f.Kind == NeisFileKind.Unknown))
                 w.Add($"[{System.IO.Path.GetFileName(f.Path)}] {(f.Error != null ? "읽는 중 문제: " + f.Error : "나이스 정오표·수행평가·일람표가 아니어서 건너뜁니다.")}");
             if (ok.Count == 0) { w.Add("분석할 수 있는 나이스 파일이 없습니다."); return w; }
@@ -171,9 +181,9 @@ namespace NeisAnalyzer
             var perfs = ok.Where(f => f.Kind == NeisFileKind.PerfSheet).ToList();
             var tables = ok.Where(f => f.Kind == NeisFileKind.ScoreTable).ToList();
             foreach (var dup in answers.GroupBy(f => (f.Header.ExamName, f.Header.ClassNo)).Where(g => g.Count() > 1))
-                w.Add($"{dup.Key.ClassNo}반 {dup.Key.ExamName} 정오표가 {dup.Count()}개 들어 있습니다. 첫 번째 파일만 사용합니다.");
+                w.Add($"{dup.Key.ClassNo}{u} {dup.Key.ExamName} 정오표가 {dup.Count()}개 들어 있습니다. 첫 번째 파일만 사용합니다.");
             foreach (var dup in perfs.GroupBy(f => f.Header.ClassNo).Where(g => g.Count() > 1))
-                w.Add($"{dup.Key}반 수행평가 일람표가 {dup.Count()}개 들어 있습니다. 첫 번째 파일만 사용합니다.");
+                w.Add($"{dup.Key}{u} 수행평가 일람표가 {dup.Count()}개 들어 있습니다. 첫 번째 파일만 사용합니다.");
             foreach (var dup in tables.GroupBy(f => f.Header.ExamName).Where(g => g.Count() > 1))
                 w.Add($"{dup.Key} 일람표가 {dup.Count()}개 들어 있습니다. 첫 번째 파일만 사용합니다.");
 
@@ -183,12 +193,12 @@ namespace NeisAnalyzer
             foreach (var e in exams)
             {
                 var missing = classes.Where(c => !answers.Any(f => f.Header.ExamName == e && f.Header.ClassNo == c)).ToList();
-                if (missing.Count > 0) w.Add($"{e} 정오표가 없는 반: {string.Join(", ", missing.Select(c => c + "반"))}");
+                if (missing.Count > 0) w.Add($"{e} 정오표가 없는 {u}: {string.Join(", ", missing.Select(c => c + u))}");
             }
             if (perfs.Count > 0)
             {
                 var missing = classes.Where(c => !perfs.Any(f => f.Header.ClassNo == c)).ToList();
-                if (missing.Count > 0) w.Add($"수행평가 일람표가 없는 반: {string.Join(", ", missing.Select(c => c + "반"))}");
+                if (missing.Count > 0) w.Add($"수행평가 일람표가 없는 {u}: {string.Join(", ", missing.Select(c => c + u))}");
             }
             else w.Add("수행평가 일람표가 없습니다. 지필 점수만으로 분석합니다(최종 점수 = 지필 원점수).");
             if (answers.Count == 0) w.Add("정오표가 없습니다. 지필 점수·문항 분석을 할 수 없습니다.");
@@ -197,7 +207,7 @@ namespace NeisAnalyzer
                 var first = perfs[0].Perf.Areas.Select(a => a.Name).ToList();
                 foreach (var p in perfs.Skip(1))
                     if (!p.Perf.Areas.Select(a => a.Name).SequenceEqual(first))
-                        w.Add($"{p.Header.ClassNo}반 수행평가 영역 구성이 {perfs[0].Header.ClassNo}반과 다릅니다.");
+                        w.Add($"{p.Header.ClassNo}{u} 수행평가 영역 구성이 {perfs[0].Header.ClassNo}{u}과 다릅니다.");
             }
             foreach (var t in tables)
                 if (!exams.Contains(t.Header.ExamName))
@@ -225,39 +235,49 @@ namespace NeisAnalyzer
             r.Classes = answers.Keys.Select(k => k.Item2).Concat(perfs.Keys).Distinct().OrderBy(c => c).ToList();
             bool hasPerfFiles = perfs.Count > 0;
 
+            // ---------- 고교학점제 강의실 모드 ----------
+            // 중학교: 학생의 반 = 파일의 반. 고교학점제: 파일은 강의실(수업 집단)이고 학생의 반은 행정반.
+            // 강의실 모드에서는 모든 "반별" 비교를 강의실 단위로 하고, 학생은 행정반/번호로 식별한다.
+            r.LectureMode = IsLectureMode(ok);
+            foreach (var a in answers.Values) foreach (var row in a.Rows) row.ClassNo = r.LectureMode ? a.ClassNo : row.HomeClassNo;
+            foreach (var p in perfs.Values) foreach (var row in p.Rows) row.ClassNo = r.LectureMode ? p.ClassNo : row.HomeClassNo;
+
             // ---------- 학생 명단 합치기 ----------
             var students = new Dictionary<string, Student>();
-            Student Get(int cls, int num, string id, string name, string source)
+            Student Get(int unit, int home, int num, string id, string name, string source)
             {
-                var key = cls + "/" + num;
+                var key = home + "/" + num;
                 Student st;
                 if (!students.TryGetValue(key, out st))
                 {
-                    st = new Student { ClassNo = cls, Number = num, StudentId = id, Name = name };
+                    st = new Student { ClassNo = unit, HomeClassNo = home, Number = num, StudentId = id, Name = name, Lecture = r.LectureMode };
                     students[key] = st;
                 }
                 else
                 {
                     if (!string.IsNullOrEmpty(name) && !string.IsNullOrEmpty(st.Name) && st.Name != name)
-                        r.Warnings.Add($"{cls}반 {num}번 이름이 파일마다 다릅니다: [{st.Name}] / [{name}] ({source}). 반·번호를 확인하세요.");
+                        r.Warnings.Add($"{home}반 {num}번 이름이 파일마다 다릅니다: [{st.Name}] / [{name}] ({source}). 반·번호를 확인하세요.");
                     else if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(st.StudentId) && st.StudentId != id)
-                        r.Warnings.Add($"{cls}반 {num}번 {name} 학번이 파일마다 다릅니다: {st.StudentId} / {id} ({source}).");
+                        r.Warnings.Add($"{home}반 {num}번 {name} 학번이 파일마다 다릅니다: {st.StudentId} / {id} ({source}).");
+                    if (st.ClassNo != unit)
+                        r.Warnings.Add($"{home}반 {num}번 {name}: 파일마다 {r.Unit}이 다릅니다({st.ClassNo}{r.Unit} / {unit}{r.Unit}, {source}). 먼저 읽은 파일의 {r.Unit}으로 둡니다.");
                 }
                 return st;
             }
             foreach (var p in perfs.Values)
                 foreach (var row in p.Rows)
                 {
-                    var st = Get(row.ClassNo, row.Number, row.StudentId, row.Name, "수행평가");
+                    var st = Get(row.ClassNo, row.HomeClassNo, row.Number, row.StudentId, row.Name, "수행평가");
                     st.Perf = row;
                 }
             foreach (var kv in answers)
                 foreach (var row in kv.Value.Rows)
                 {
-                    var st = Get(row.ClassNo, row.Number, row.StudentId, row.Name, kv.Key.Item1 + " 정오표");
+                    var st = Get(row.ClassNo, row.HomeClassNo, row.Number, row.StudentId, row.Name, kv.Key.Item1 + " 정오표");
                     st.Written[kv.Key.Item1] = row;
                 }
             foreach (var t in tables)
+                if (!r.LectureMode)   // 강의실 모드에서는 일람표의 번호가 행정반 번호와 섞여 학생을 특정할 수 없다
                 foreach (var cls in t.Value.Cells)
                     foreach (var cell in cls.Value)
                         if (cell.Value.Exempt)
@@ -265,7 +285,7 @@ namespace NeisAnalyzer
                             Student st;
                             if (students.TryGetValue(cls.Key + "/" + cell.Key, out st)) st.WrittenExemptByTable.Add(t.Key);
                         }
-            r.Students = students.Values.OrderBy(x => x.ClassNo).ThenBy(x => x.Number).ToList();
+            r.Students = students.Values.OrderBy(x => x.ClassNo).ThenBy(x => x.HomeClassNo).ThenBy(x => x.Number).ToList();
 
             // ---------- 학생별 점수 ----------
             int areaCount = s.PerfAreas.Count;
@@ -432,7 +452,7 @@ namespace NeisAnalyzer
                 var ea = AnalyzeExam(e, answers.Where(a => a.Key.Item1 == e).ToDictionary(a => a.Key.Item2, a => a.Value), s, r);
                 ScoreTableFile t;
                 if (tables.TryGetValue(e, out t) || (tables.Count == 1 && r.Exams.Count == 1 && (t = tables.Values.First()) != null))
-                    Verify(ea, t, answers.Where(a => a.Key.Item1 == e).ToDictionary(a => a.Key.Item2, a => a.Value));
+                    Verify(ea, t, answers.Where(a => a.Key.Item1 == e).ToDictionary(a => a.Key.Item2, a => a.Value), r.LectureMode);
                 r.ExamAnalyses.Add(ea);
             }
 
@@ -454,6 +474,7 @@ namespace NeisAnalyzer
             }
 
             BuildNotes(r);
+            if (r.LectureMode) r.Notes.Add("고교학점제 강의실 모드: 파일 머리말이 '강의실'이거나 한 파일에 여러 반 학생이 섞여 있어, 반 대신 강의실(수업 집단) 단위로 비교했습니다. 학생은 행정반/번호로 식별하고 '반' 열에 행정반, '강의실' 열에 수업 집단을 적었습니다. 검산의 일람표도 강의실 단위로 비교합니다.");
             r.Notes.Add("표준편차는 모집단 방식(인원수 N으로 나눔)으로 계산했습니다. 교육과정평가원(KICE) 성취평가 분석 프로그램과 같은 방식이며, 엑셀 STDEV.S(표본 방식, N−1로 나눔)보다 조금 작게 나옵니다.");
             r.Notes.Add($"성취도별 문항 정답률의 성취도는 최종 점수(수행+지필) 기준 성취도입니다. 낮은 성취도 집단이 높은 성취도 집단보다 {LevelInversionGap:P0} 이상 많이 맞힌 문항은 '수준 역전'으로 표시합니다(두 집단 모두 {LevelInversionMinN}명 이상일 때).");
             BuildHighlights(r);
@@ -467,7 +488,7 @@ namespace NeisAnalyzer
             // 문항 구성이 반마다 같은지 확인
             foreach (var kv in byClass)
                 if (kv.Value.Items.Count != first.Items.Count || !kv.Value.Items.Select(i => i.CorrectRaw + "/" + i.Points).SequenceEqual(first.Items.Select(i => i.CorrectRaw + "/" + i.Points)))
-                    r.Warnings.Add($"{kv.Key}반 {exam} 정오표의 문항 수·정답·배점이 다른 반과 다릅니다. 문항 분석은 첫 반 기준으로 합니다.");
+                    r.Warnings.Add($"{kv.Key}{r.Unit} {exam} 정오표의 문항 수·정답·배점이 다른 {r.Unit}과 다릅니다. 문항 분석은 첫 {r.Unit} 기준으로 합니다.");
             var rows = byClass.Values.SelectMany(f => f.Rows.Where(x => x.Answers.Length == first.Items.Count)).ToList();
             ea.N = rows.Count;
             if (rows.Count == 0) return ea;
@@ -563,7 +584,7 @@ namespace NeisAnalyzer
             return found.Count == 0 ? null : "수준 역전: " + string.Join(", ", found);
         }
 
-        static void Verify(ExamAnalysis ea, ScoreTableFile t, Dictionary<int, AnswerSheetFile> byClass)
+        static void Verify(ExamAnalysis ea, ScoreTableFile t, Dictionary<int, AnswerSheetFile> byClass, bool lecture)
         {
             ea.Table = t;
             bool all = true;
@@ -584,8 +605,8 @@ namespace NeisAnalyzer
                 }
                 if (!v.Match) all = false;
                 ea.Verify.Add(v);
-                // 학생별 비교
-                if (byClass.ContainsKey(cls) && t.Cells.ContainsKey(cls))
+                // 학생별 비교 (강의실 모드에서는 번호가 여러 반에 걸쳐 겹치므로 생략)
+                if (!lecture && byClass.ContainsKey(cls) && t.Cells.ContainsKey(cls))
                 {
                     var rows = byClass[cls].Rows.ToDictionary(x => x.Number, x => x);
                     foreach (var cell in t.Cells[cls])
@@ -633,7 +654,7 @@ namespace NeisAnalyzer
             h.Add($"분석 대상 {r.Count}명(명단 {r.Students.Count}명 중 {r.Students.Count - r.Count}명 제외). 학년 평균 {r.Mean:0.0}점, 중앙값 {r.Median:0.0}점, 표준편차 {r.Sd:0.0}점, 최고 {r.Max:0.##}점, 최저 {r.Min:0.##}점.");
             h.Add("성취도 분포: " + string.Join(", ", Grades.Select(g => $"{g} {r.AchievementCounts[g]}명({(double)r.AchievementCounts[g] / r.Count:P0})")) + ".");
             var cs = r.ClassSummaries.Where(c => c.Count > 0).OrderByDescending(c => c.Mean).ToList();
-            if (cs.Count >= 2) h.Add($"반별 평균이 가장 높은 반은 {cs.First().ClassNo}반({cs.First().Mean:0.0}점), 가장 낮은 반은 {cs.Last().ClassNo}반({cs.Last().Mean:0.0}점)으로 {cs.First().Mean - cs.Last().Mean:0.0}점 차이가 납니다.");
+            if (cs.Count >= 2) h.Add($"{r.Unit}별 평균이 가장 높은 {r.Unit}은 {cs.First().ClassNo}{r.Unit}({cs.First().Mean:0.0}점), 가장 낮은 {r.Unit}은 {cs.Last().ClassNo}{r.Unit}({cs.Last().Mean:0.0}점)으로 {cs.First().Mean - cs.Last().Mean:0.0}점 차이가 납니다.");
             foreach (var ea in r.ExamAnalyses)
             {
                 var items = ea.ItemStats.Where(i => i.Correct.HasValue).ToList();
@@ -651,7 +672,7 @@ namespace NeisAnalyzer
                 if (ea.KR20.HasValue) h.Add($"{pre}시험 신뢰도(KR-20)는 {ea.KR20:0.00}로 {(ea.KR20 >= 0.8 ? "양호" : ea.KR20 >= 0.7 ? "보통" : "낮은 편")}입니다.");
                 var blanks = ea.ItemStats.Sum(i => i.BlankCount);
                 if (blanks > 0) h.Add($"{pre}무표기가 모두 {blanks}건 있습니다.");
-                if (ea.VerifyAllMatch == true) h.Add($"{pre}검산: 정오표로 계산한 반별 응시생수·총점·평균이 나이스 일람표와 모두 일치합니다.");
+                if (ea.VerifyAllMatch == true) h.Add($"{pre}검산: 정오표로 계산한 {r.Unit}별 응시생수·총점·평균이 나이스 일람표와 모두 일치합니다.");
                 else if (ea.VerifyAllMatch == false) h.Add($"{pre}검산: 일람표와 맞지 않는 항목이 있습니다. '검산' 시트를 확인하세요.");
             }
             if (r.PerfWrittenCorr.HasValue) h.Add($"수행평가와 지필평가의 상관계수는 {r.PerfWrittenCorr:0.00}입니다{(r.PerfWrittenCorr >= 0.7 ? " (매우 비슷한 경향)" : r.PerfWrittenCorr >= 0.4 ? " (어느 정도 비슷한 경향)" : " (관련이 약함)")}.");
